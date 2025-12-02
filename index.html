@@ -2615,9 +2615,10 @@ const CONFIG = {
     // Wave System
     wavePrepTime: 3,
     waveIntervalTime: 5,
-    baseWaveEnemies: 4,
-    enemiesPerWave: 2,
-    maxEnemiesAlive: 6,
+    baseWaveEnemies: 8,           // V7.3: Base enemies per wave
+    enemiesPerWave: 4,            // V7.3: Additional enemies scaling per wave
+    maxEnemiesAlive: 5,           // V7.3: Max enemies on screen at once (rest spawn after kills)
+    maxMinionsInBossFight: 4,     // V7.3: Max minions during boss fights
     waveCompletionBonus: 500,
 
     // Difficulty Multipliers
@@ -3948,11 +3949,14 @@ class LootGenerator {
     }
 
     generateLootDrop(enemyType, waveNumber) {
-        // Determine drop chance based on enemy type
-        let dropChance = 0.15; // 15% base
+        // Determine drop chance based on enemy type - V7.2: Increased drop rates
+        let dropChance = 0.25; // 25% base (was 15%)
         if (enemyType === 'boss') dropChance = 1.0; // Bosses always drop
-        else if (enemyType === 'grandfather') dropChance = 0.5;
-        else if (enemyType === 'tock') dropChance = 0.25;
+        else if (enemyType === 'grandfather') dropChance = 0.7; // 70% (was 50%)
+        else if (enemyType === 'tock') dropChance = 0.4; // 40% (was 25%)
+        else if (enemyType === 'pendulum') dropChance = 0.5;
+        else if (enemyType === 'secondhand') dropChance = 0.45;
+        else if (enemyType === 'mite') dropChance = 0.35;
 
         if (Math.random() > dropChance) return null;
 
@@ -5460,9 +5464,11 @@ class VFXManager {
                 continue;
             }
 
-            // Physics
+            // Physics - V6.2 FIX: Avoid clone() per-frame
             p.userData.velocity.y -= p.userData.gravity * deltaTime;
-            p.position.add(p.userData.velocity.clone().multiplyScalar(deltaTime));
+            p.position.x += p.userData.velocity.x * deltaTime;
+            p.position.y += p.userData.velocity.y * deltaTime;
+            p.position.z += p.userData.velocity.z * deltaTime;
 
             // Fade
             const life = 1 - (p.userData.age / p.userData.lifetime);
@@ -5712,6 +5718,9 @@ class AudioManager {
         this.arpPattern = null;
         this.menuPatterns = [];
 
+        // V6: Track active SFX synths for cleanup
+        this.activeSFX = [];
+
         // Musical scales (A minor / dark synthwave)
         this.scale = ['A2', 'C3', 'D3', 'E3', 'G3', 'A3', 'C4', 'D4', 'E4', 'G4', 'A4'];
         this.bassNotes = ['A1', 'E1', 'G1', 'D1', 'A1', 'C2', 'E1', 'G1'];
@@ -5722,6 +5731,66 @@ class AudioManager {
             ['E2', 'G#2', 'B2'], // E
         ];
         this.currentChord = 0;
+
+        // V7.3: Enhanced combat music system
+        this.combatPatterns = [];
+        this.isBossFight = false;
+        this.bossElement = null;
+
+        // Melodic themes for combat - 16-note phrases for more musicality
+        this.combatMelodies = {
+            aggressive: ['A4', 'E4', 'A4', 'G4', 'F4', 'E4', 'D4', 'E4', 'F4', 'G4', 'A4', 'E5', 'D5', 'C5', 'B4', 'A4'],
+            tension: ['E4', 'F4', 'E4', 'D4', 'E4', 'F4', 'G4', 'E4', 'F4', 'E4', 'D4', 'C4', 'D4', 'E4', 'F4', 'E4'],
+            heroic: ['A4', 'C5', 'E5', 'A5', 'G5', 'E5', 'C5', 'A4', 'G4', 'A4', 'C5', 'D5', 'E5', 'G5', 'E5', 'C5'],
+            dark: ['A3', 'B3', 'C4', 'A3', 'G3', 'F3', 'E3', 'A3', 'G3', 'A3', 'Bb3', 'A3', 'G3', 'F3', 'E3', 'D3'],
+            triumphant: ['E5', 'D5', 'E5', 'G5', 'A5', 'G5', 'E5', 'D5', 'C5', 'D5', 'E5', 'D5', 'C5', 'A4', 'G4', 'A4'],
+            ominous: ['A3', 'E4', 'A3', 'E4', 'G3', 'D4', 'G3', 'D4', 'F3', 'C4', 'F3', 'C4', 'E3', 'B3', 'E3', 'B3']
+        };
+
+        // Counter-melodies that complement the main melody
+        this.counterMelodies = {
+            aggressive: ['E3', null, 'E3', null, 'D3', null, 'D3', null, 'C3', null, 'C3', null, 'B2', null, 'E3', null],
+            tension: ['A2', null, null, null, 'G2', null, null, null, 'F2', null, null, null, 'E2', null, null, null],
+            heroic: ['C3', null, 'E3', null, 'G3', null, 'E3', null, 'D3', null, 'F3', null, 'A3', null, 'G3', null],
+            dark: ['E2', null, null, 'E2', null, null, 'D2', null, null, 'D2', null, null, 'C2', null, null, 'E2'],
+            triumphant: ['A2', 'E3', null, 'A2', 'G2', 'D3', null, 'G2', 'F2', 'C3', null, 'F2', 'E2', 'B2', null, 'E2'],
+            ominous: ['A1', null, null, null, 'G1', null, null, null, 'F1', null, null, null, 'E1', null, null, null]
+        };
+
+        // Boss fight chord progressions (more dramatic)
+        this.bossChords = {
+            TORNADO: [['D2', 'F2', 'A2'], ['C2', 'E2', 'G2'], ['Bb1', 'D2', 'F2'], ['A1', 'C2', 'E2']],
+            INFERNO: [['A1', 'E2', 'A2'], ['G1', 'D2', 'G2'], ['F1', 'C2', 'F2'], ['E1', 'B1', 'E2']],
+            FREEZE: [['E2', 'G2', 'B2'], ['D2', 'F#2', 'A2'], ['C2', 'E2', 'G2'], ['B1', 'D#2', 'F#2']],
+            STORM: [['A1', 'C2', 'E2'], ['F1', 'A1', 'C2'], ['D1', 'F1', 'A1'], ['E1', 'G#1', 'B1']],
+            DEVOUR: [['A1', 'Eb2', 'A2'], ['G1', 'Db2', 'G2'], ['F1', 'B1', 'F2'], ['E1', 'Bb1', 'E2']]
+        };
+    }
+
+    // V6: Dispose all active SFX synths immediately (called on game state changes)
+    disposeAllSFX() {
+        for (const synth of this.activeSFX) {
+            try {
+                if (synth && typeof synth.dispose === 'function') {
+                    synth.dispose();
+                }
+            } catch (e) {
+                // Ignore disposal errors
+            }
+        }
+        this.activeSFX = [];
+    }
+
+    // V6: Track a synth for later cleanup
+    trackSFX(synth) {
+        this.activeSFX.push(synth);
+        // Auto-cleanup after 2 seconds to prevent memory leaks
+        setTimeout(() => {
+            const idx = this.activeSFX.indexOf(synth);
+            if (idx !== -1) {
+                this.activeSFX.splice(idx, 1);
+            }
+        }, 2000);
     }
 
     async init() {
@@ -5763,99 +5832,156 @@ class AudioManager {
                 this.sfxGain = new Tone.Gain(this.sfxVolume).toDestination();
             }
 
-            // === BASS SYNTH (Thick, dark bass) ===
+            // === BASS SYNTH (Thick, punchy synthwave bass) ===
             this.bassSynth = new Tone.MonoSynth({
-                oscillator: { type: 'sawtooth' },
-                envelope: {
-                    attack: 0.01,
-                    decay: 0.3,
-                    sustain: 0.4,
-                    release: 0.8
-                },
-                filterEnvelope: {
-                    attack: 0.01,
-                    decay: 0.2,
-                    sustain: 0.3,
-                    release: 0.5,
-                    baseFrequency: 100,
-                    octaves: 2.5
-                }
-            }).connect(this.musicGain);
-
-            // === PAD SYNTH (Atmospheric chords) ===
-            this.padSynth = new Tone.PolySynth(Tone.Synth, {
-                oscillator: { type: 'triangle' },
-                envelope: {
-                    attack: 0.5,
-                    decay: 0.5,
-                    sustain: 0.8,
-                    release: 2
-                }
-            }).connect(this.musicGain);
-            this.padSynth.volume.value = -12;
-
-            // === LEAD SYNTH (Melodies and stabs) ===
-            this.leadSynth = new Tone.Synth({
-                oscillator: { type: 'square' },
-                envelope: {
-                    attack: 0.01,
-                    decay: 0.2,
-                    sustain: 0.3,
-                    release: 0.5
-                }
-            }).connect(this.musicGain);
-            this.leadSynth.volume.value = -8;
-
-            // === ARP SYNTH (Fast arpeggios) ===
-            this.arpSynth = new Tone.Synth({
-                oscillator: { type: 'sawtooth' },
+                oscillator: { type: 'fatsawtooth', count: 3, spread: 20 },
                 envelope: {
                     attack: 0.005,
-                    decay: 0.1,
-                    sustain: 0.1,
-                    release: 0.1
+                    decay: 0.2,
+                    sustain: 0.6,
+                    release: 0.3
+                },
+                filterEnvelope: {
+                    attack: 0.005,
+                    decay: 0.15,
+                    sustain: 0.4,
+                    release: 0.2,
+                    baseFrequency: 150,
+                    octaves: 3
                 }
             }).connect(this.musicGain);
-            this.arpSynth.volume.value = -15;
+            this.bassSynth.volume.value = -4;
 
-            // === DRUMS ===
+            // === PAD SYNTH (Lush atmospheric chords with chorus) ===
+            this.padChorus = new Tone.Chorus({
+                frequency: 1.5,
+                delayTime: 3.5,
+                depth: 0.7,
+                wet: 0.5
+            }).connect(this.musicGain);
+            this.padSynth = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: 'fatsine', count: 3, spread: 30 },
+                envelope: {
+                    attack: 0.8,
+                    decay: 0.4,
+                    sustain: 0.9,
+                    release: 2.5
+                }
+            }).connect(this.padChorus);
+            this.padSynth.volume.value = -10;
+
+            // === LEAD SYNTH (Bright, cutting synthwave lead) ===
+            this.leadFilter = new Tone.Filter({
+                frequency: 3000,
+                type: 'lowpass',
+                rolloff: -12
+            }).connect(this.musicGain);
+            this.leadSynth = new Tone.Synth({
+                oscillator: { type: 'fatsquare', count: 2, spread: 15 },
+                envelope: {
+                    attack: 0.02,
+                    decay: 0.15,
+                    sustain: 0.5,
+                    release: 0.4
+                }
+            }).connect(this.leadFilter);
+            this.leadSynth.volume.value = -6;
+
+            // === ARP SYNTH (Crisp, rhythmic arpeggios) ===
+            this.arpDelay = new Tone.PingPongDelay({
+                delayTime: '16n',
+                feedback: 0.2,
+                wet: 0.3
+            }).connect(this.musicGain);
+            this.arpSynth = new Tone.Synth({
+                oscillator: { type: 'triangle8' },
+                envelope: {
+                    attack: 0.002,
+                    decay: 0.08,
+                    sustain: 0.15,
+                    release: 0.08
+                }
+            }).connect(this.arpDelay);
+            this.arpSynth.volume.value = -12;
+
+            // === DRUMS - Punchier and more presence ===
+            this.kickCompressor = new Tone.Compressor({
+                threshold: -20,
+                ratio: 6,
+                attack: 0.003,
+                release: 0.1
+            }).connect(this.musicGain);
             this.kick = new Tone.MembraneSynth({
-                pitchDecay: 0.05,
-                octaves: 6,
+                pitchDecay: 0.04,
+                octaves: 8,
                 oscillator: { type: 'sine' },
                 envelope: {
                     attack: 0.001,
-                    decay: 0.4,
+                    decay: 0.3,
                     sustain: 0,
-                    release: 0.4
+                    release: 0.25
                 }
+            }).connect(this.kickCompressor);
+            this.kick.volume.value = -2;
+
+            // Layered snare with body and crack
+            this.snareBody = new Tone.MembraneSynth({
+                pitchDecay: 0.01,
+                octaves: 4,
+                envelope: { attack: 0.001, decay: 0.15, sustain: 0, release: 0.1 }
             }).connect(this.musicGain);
-            this.kick.volume.value = -6;
+            this.snareBody.volume.value = -12;
 
             this.snare = new Tone.NoiseSynth({
                 noise: { type: 'white' },
                 envelope: {
                     attack: 0.001,
-                    decay: 0.2,
+                    decay: 0.15,
                     sustain: 0,
-                    release: 0.2
+                    release: 0.1
                 }
             }).connect(this.musicGain);
-            this.snare.volume.value = -10;
+            this.snare.volume.value = -8;
 
             this.hihat = new Tone.MetalSynth({
-                frequency: 200,
+                frequency: 300,
                 envelope: {
                     attack: 0.001,
-                    decay: 0.05,
+                    decay: 0.04,
                     release: 0.01
                 },
-                harmonicity: 5.1,
-                modulationIndex: 32,
-                resonance: 4000,
-                octaves: 1.5
+                harmonicity: 6,
+                modulationIndex: 40,
+                resonance: 5000,
+                octaves: 1.2
             }).connect(this.musicGain);
-            this.hihat.volume.value = -20;
+            this.hihat.volume.value = -18;
+
+            // Tom drums for fills
+            this.tom = new Tone.MembraneSynth({
+                pitchDecay: 0.02,
+                octaves: 5,
+                envelope: { attack: 0.001, decay: 0.2, sustain: 0, release: 0.15 }
+            }).connect(this.musicGain);
+            this.tom.volume.value = -10;
+
+            // Sub bass for extra low-end punch during boss fights
+            this.subBass = new Tone.Synth({
+                oscillator: { type: 'sine' },
+                envelope: { attack: 0.01, decay: 0.3, sustain: 0.5, release: 0.3 }
+            }).connect(this.musicGain);
+            this.subBass.volume.value = -8;
+
+            // Crash cymbal for accents
+            this.crash = new Tone.MetalSynth({
+                frequency: 150,
+                envelope: { attack: 0.001, decay: 1.5, release: 0.5 },
+                harmonicity: 5,
+                modulationIndex: 50,
+                resonance: 3000,
+                octaves: 2
+            }).connect(this.musicGain);
+            this.crash.volume.value = -14;
 
             // === SFX SYNTHS ===
             this.hitSynth = new Tone.Synth({
@@ -5884,52 +6010,267 @@ class AudioManager {
     startMusic() {
         if (!this.initialized || this.isPlaying) return;
 
-        Tone.Transport.bpm.value = 128;
+        Tone.Transport.bpm.value = 140; // Faster, more energetic
         this.isPlaying = true;
 
-        // === BASS PATTERN ===
+        // Track indices
         let bassIndex = 0;
+        let melodyIndex = 0;
+        let arpIndex = 0;
+        let measureCount = 0;
+        let currentMelody = 'aggressive';
+
+        // === ENHANCED BASS PATTERN - Syncopated & groovy ===
         this.bassPattern = new Tone.Loop((time) => {
-            const note = this.bassNotes[bassIndex % this.bassNotes.length];
-            this.bassSynth.triggerAttackRelease(note, '8n', time);
+            const progression = this.isBossFight && this.bossElement && this.bossChords[this.bossElement]
+                ? this.bossChords[this.bossElement]
+                : this.chordProgressions;
+
+            const chordIdx = Math.floor(measureCount / 2) % progression.length;
+            const chord = progression[chordIdx];
+            const root = chord[0];
+
+            // Syncopated bass rhythm: 1 . . 3 . &4 &
+            const beatInBar = bassIndex % 8;
+            const velocity = this.isBossFight ? 0.9 : 0.7;
+
+            if (beatInBar === 0) {
+                // Strong downbeat
+                this.bassSynth.triggerAttackRelease(root, '8n', time, velocity);
+            } else if (beatInBar === 4) {
+                // Beat 3
+                this.bassSynth.triggerAttackRelease(root, '8n', time, velocity * 0.8);
+            } else if (beatInBar === 6 && this.combatIntensity > 0.3) {
+                // &4 syncopation
+                const fifth = chord[2] || chord[1];
+                this.bassSynth.triggerAttackRelease(fifth, '16n', time, velocity * 0.6);
+            } else if (beatInBar === 7 && this.combatIntensity > 0.5) {
+                // & before 1
+                this.bassSynth.triggerAttackRelease(root, '16n', time, velocity * 0.5);
+            }
             bassIndex++;
-        }, '4n').start(0);
+        }, '8n').start(0);
+        this.combatPatterns.push(this.bassPattern);
 
-        // === DRUM PATTERN ===
+        // === DYNAMIC DRUM PATTERN ===
         this.drumPattern = new Tone.Loop((time) => {
-            // Kick on 1 and 3
+            const q = Tone.Time('4n').toSeconds();
+            const e = Tone.Time('8n').toSeconds();
+            const s = Tone.Time('16n').toSeconds();
+
+            // KICK: 4-on-the-floor with variations
             this.kick.triggerAttackRelease('C1', '8n', time);
-            this.kick.triggerAttackRelease('C1', '8n', time + Tone.Time('2n').toSeconds());
-
-            // Snare on 2 and 4
-            if (this.combatIntensity > 0.3) {
-                this.snare.triggerAttackRelease('8n', time + Tone.Time('4n').toSeconds());
-                this.snare.triggerAttackRelease('8n', time + Tone.Time('4n').toSeconds() * 3);
+            if (this.combatIntensity > 0.4 || this.isBossFight) {
+                this.kick.triggerAttackRelease('C1', '8n', time + q * 2);
+            }
+            // Ghost kick on &3 at high intensity
+            if (this.combatIntensity > 0.7 || this.isBossFight) {
+                this.kick.triggerAttackRelease('D1', '16n', time + q * 2 + e, 0.4);
             }
 
-            // Hihats - faster when more intense
-            const hihatInterval = this.combatIntensity > 0.6 ? '16n' : '8n';
-            for (let i = 0; i < (this.combatIntensity > 0.6 ? 8 : 4); i++) {
-                this.hihat.triggerAttackRelease('32n', time + Tone.Time(hihatInterval).toSeconds() * i, 0.3);
+            // SUB BASS during boss fights - reinforces the kick
+            if (this.isBossFight) {
+                this.subBass.triggerAttackRelease('A0', '4n', time, 0.7);
+                this.subBass.triggerAttackRelease('A0', '4n', time + q * 2, 0.5);
             }
+
+            // SNARE: 2 and 4, layered with body for punch
+            this.snare.triggerAttackRelease('16n', time + q);
+            this.snareBody.triggerAttackRelease(180, '16n', time + q);
+            this.snare.triggerAttackRelease('16n', time + q * 3);
+            this.snareBody.triggerAttackRelease(180, '16n', time + q * 3);
+
+            // TOM FILL at high intensity - every 8 bars
+            if ((this.combatIntensity > 0.7 || this.isBossFight) && measureCount % 8 === 7) {
+                // Descending tom fill
+                this.tom.triggerAttackRelease(180, '16n', time + q * 3, 0.7);
+                this.tom.triggerAttackRelease(140, '16n', time + q * 3 + s, 0.65);
+                this.tom.triggerAttackRelease(100, '16n', time + q * 3 + s * 2, 0.6);
+                this.tom.triggerAttackRelease(80, '16n', time + q * 3 + s * 3, 0.55);
+            }
+            // Snare roll at high intensity or boss - every 4 bars (except tom fill bars)
+            else if ((this.combatIntensity > 0.8 || this.isBossFight) && measureCount % 4 === 3) {
+                // Fill on bar 4
+                for (let i = 0; i < 4; i++) {
+                    this.snare.triggerAttackRelease('32n', time + q * 3 + s * i, 0.4 + i * 0.15);
+                    this.snareBody.triggerAttackRelease(180 + i * 20, '32n', time + q * 3 + s * i, 0.3 + i * 0.1);
+                }
+            }
+
+            // CRASH on downbeat of every 8 bars for impact
+            if ((this.combatIntensity > 0.6 || this.isBossFight) && measureCount % 8 === 0 && measureCount > 0) {
+                this.crash.triggerAttackRelease('8n', time, 0.5);
+            }
+
+            // HIHATS: Varies with intensity
+            if (this.combatIntensity > 0.2 || this.isBossFight) {
+                const hats = this.isBossFight ? 16 : (this.combatIntensity > 0.6 ? 8 : 4);
+                const interval = this.isBossFight ? s : (this.combatIntensity > 0.6 ? s : e);
+                for (let i = 0; i < hats; i++) {
+                    const vel = (i % 4 === 0) ? 0.5 : (i % 2 === 0 ? 0.3 : 0.2);
+                    this.hihat.triggerAttackRelease('64n', time + interval * i, vel);
+                }
+            }
+
+            // OPEN HIHAT accent on &4
+            if (this.combatIntensity > 0.5 && measureCount % 2 === 1) {
+                this.hihat.triggerAttackRelease('8n', time + q * 3 + e, 0.6);
+            }
+
+            measureCount++;
         }, '1m').start(0);
+        this.combatPatterns.push(this.drumPattern);
 
-        // === CHORD CHANGES ===
+        // === CHORD PAD - Rich and evolving ===
         this.chordPattern = new Tone.Loop((time) => {
-            const chord = this.chordProgressions[this.currentChord % this.chordProgressions.length];
-            this.padSynth.triggerAttackRelease(chord, '2n', time, 0.3);
+            const progression = this.isBossFight && this.bossElement && this.bossChords[this.bossElement]
+                ? this.bossChords[this.bossElement]
+                : this.chordProgressions;
+
+            const chord = progression[this.currentChord % progression.length];
+
+            // Layer multiple octaves for richness
+            const velocity = this.isBossFight ? 0.5 : 0.35;
+            this.padSynth.triggerAttackRelease(chord, '1m', time, velocity);
+
+            // Upper octave layer during boss fights
+            if (this.isBossFight) {
+                const upperChord = chord.map(n => {
+                    const note = n.slice(0, -1);
+                    const oct = parseInt(n.slice(-1)) + 1;
+                    return note + oct;
+                });
+                this.padSynth.triggerAttackRelease(upperChord, '1m', time + 0.05, velocity * 0.4);
+            }
+
             this.currentChord++;
         }, '2m').start(0);
+        this.combatPatterns.push(this.chordPattern);
 
-        // === ARPEGGIO PATTERN (intensity-based) ===
-        let arpIndex = 0;
-        this.arpPattern = new Tone.Loop((time) => {
-            if (this.combatIntensity > 0.5) {
-                const note = this.scale[arpIndex % this.scale.length];
-                this.arpSynth.triggerAttackRelease(note, '16n', time);
-                arpIndex++;
+        // === MELODIC LEAD - Actual memorable melodies ===
+        let counterIndex = 0;
+        const melodyPattern = new Tone.Loop((time) => {
+            if (this.combatIntensity < 0.35 && !this.isBossFight) return;
+
+            // Switch melodies based on context
+            if (this.isBossFight) {
+                currentMelody = this.bossElement === 'DEVOUR' ? 'ominous' : 'dark';
+            } else if (this.combatIntensity > 0.85) {
+                currentMelody = 'triumphant';
+            } else if (this.combatIntensity > 0.65) {
+                currentMelody = 'heroic';
+            } else if (this.combatIntensity > 0.45) {
+                currentMelody = 'aggressive';
+            } else {
+                currentMelody = 'tension';
             }
-        }, '16n').start(0);
+
+            const melody = this.combatMelodies[currentMelody];
+            const note = melody[melodyIndex % melody.length];
+
+            // Add occasional rests for breathing room
+            const shouldRest = melodyIndex % 16 === 7 || melodyIndex % 16 === 15;
+            if (!shouldRest) {
+                // Humanize timing with swing feel
+                const swing = (melodyIndex % 2 === 1) ? 0.025 : 0;
+                // Dynamic velocity curve - emphasize downbeats
+                const beatInPhrase = melodyIndex % 4;
+                let velocity = 0.5;
+                if (beatInPhrase === 0) velocity = 0.8;
+                else if (beatInPhrase === 2) velocity = 0.65;
+                else velocity = 0.45 + Math.random() * 0.15;
+
+                this.leadSynth.triggerAttackRelease(note, '8n', time + swing, velocity);
+            }
+
+            melodyIndex++;
+        }, '8n').start('4m'); // Enter after 4 bars
+        this.combatPatterns.push(melodyPattern);
+
+        // === COUNTER MELODY - Adds depth at high intensity ===
+        const counterPattern = new Tone.Loop((time) => {
+            if (this.combatIntensity < 0.55 && !this.isBossFight) return;
+
+            const counterMel = this.counterMelodies[currentMelody] || this.counterMelodies.aggressive;
+            const note = counterMel[counterIndex % counterMel.length];
+
+            if (note) {
+                const velocity = this.isBossFight ? 0.5 : 0.35;
+                this.arpSynth.triggerAttackRelease(note, '4n', time, velocity);
+            }
+            counterIndex++;
+        }, '8n').start('8m'); // Enter after 8 bars for buildup
+        this.combatPatterns.push(counterPattern);
+
+        // === ARPEGGIO PATTERN - Musical & rhythmic ===
+        this.arpPattern = new Tone.Loop((time) => {
+            if (this.combatIntensity < 0.3 && !this.isBossFight) return;
+
+            const progression = this.isBossFight && this.bossElement && this.bossChords[this.bossElement]
+                ? this.bossChords[this.bossElement]
+                : this.chordProgressions;
+
+            const chordIdx = Math.floor(measureCount / 2) % progression.length;
+            const chord = progression[chordIdx];
+
+            // Arpeggio pattern: up then down
+            const arpPattern = [0, 1, 2, 1, 0, 2, 1, 0];
+            const chordTone = chord[arpPattern[arpIndex % 8] % chord.length];
+
+            // Transpose up for brightness
+            const note = chordTone.slice(0, -1);
+            const oct = parseInt(chordTone.slice(-1)) + 2;
+            const arpNote = note + oct;
+
+            const velocity = this.isBossFight ? 0.5 : 0.35;
+            this.arpSynth.triggerAttackRelease(arpNote, '16n', time, velocity);
+
+            arpIndex++;
+        }, '16n').start('2m'); // Enter after 2 bars
+        this.combatPatterns.push(this.arpPattern);
+
+        // === TENSION BUILDER - Rising at high intensity ===
+        const tensionPattern = new Tone.Loop((time) => {
+            if (!this.isBossFight && this.combatIntensity < 0.7) return;
+
+            // Rising drone effect
+            const tensionSynth = new Tone.Synth({
+                oscillator: { type: 'sawtooth' },
+                envelope: { attack: 0.5, decay: 1, sustain: 0, release: 0.5 }
+            }).connect(this.musicGain);
+            tensionSynth.volume.value = -20;
+
+            const startNote = this.isBossFight ? 'A1' : 'E2';
+            tensionSynth.triggerAttackRelease(startNote, '2m', time);
+            tensionSynth.frequency.rampTo(this.isBossFight ? 220 : 165, 2);
+
+            setTimeout(() => tensionSynth.dispose(), 3000);
+        }, '4m').start('8m');
+        this.combatPatterns.push(tensionPattern);
+
+        // === STAB ACCENTS - Punctuate intense moments ===
+        const stabPattern = new Tone.Loop((time) => {
+            if (!this.isBossFight && this.combatIntensity < 0.6) return;
+            if (measureCount % 4 !== 0) return; // Every 4 bars
+
+            const chord = this.chordProgressions[this.currentChord % 4];
+            const stabChord = chord.map(n => {
+                const note = n.slice(0, -1);
+                const oct = parseInt(n.slice(-1)) + 1;
+                return note + oct;
+            });
+
+            // Staccato stab
+            const stab = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: 'square' },
+                envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.1 }
+            }).connect(this.musicGain);
+            stab.volume.value = -10;
+            stab.triggerAttackRelease(stabChord, '16n', time);
+
+            setTimeout(() => stab.dispose(), 300);
+        }, '1m').start('4m');
+        this.combatPatterns.push(stabPattern);
 
         Tone.Transport.start();
     }
@@ -5938,10 +6279,35 @@ class AudioManager {
         if (!this.isPlaying) return;
         this.isPlaying = false;
         Tone.Transport.stop();
+
+        // Stop all combat patterns
+        this.combatPatterns.forEach(p => {
+            try { p.stop(); } catch (e) {}
+        });
+        this.combatPatterns = [];
+
+        // Legacy pattern cleanup
         if (this.bassPattern) this.bassPattern.stop();
         if (this.drumPattern) this.drumPattern.stop();
         if (this.arpPattern) this.arpPattern.stop();
         if (this.chordPattern) this.chordPattern.stop();
+
+        // Reset boss state
+        this.isBossFight = false;
+        this.bossElement = null;
+    }
+
+    // V7.3: Enter boss fight mode - changes music dynamically
+    enterBossFight(element = null) {
+        this.isBossFight = true;
+        this.bossElement = element;
+        // Music will automatically adapt on next pattern cycle
+    }
+
+    // V7.3: Exit boss fight mode
+    exitBossFight() {
+        this.isBossFight = false;
+        this.bossElement = null;
     }
 
     // === MENU/HOMEPAGE MUSIC - Epic Cinematic Dark Ambient ===
@@ -6367,23 +6733,47 @@ class AudioManager {
     setCombatIntensity(intensity) {
         this.combatIntensity = Math.max(0, Math.min(1, intensity));
 
-        // Adjust filter for more intensity
+        // Adjust main filter for more intensity - opens up brightness
         if (this.filter) {
-            const freq = 1000 + this.combatIntensity * 3000;
+            const freq = 1200 + this.combatIntensity * 3500;
             this.filter.frequency.rampTo(freq, 0.5);
         }
 
-        // Speed up BPM slightly with intensity
+        // Adjust lead filter for presence
+        if (this.leadFilter) {
+            const leadFreq = 2000 + this.combatIntensity * 4000;
+            this.leadFilter.frequency.rampTo(leadFreq, 0.3);
+        }
+
+        // Adjust arp delay feedback for more echo at low intensity
+        if (this.arpDelay) {
+            const feedback = 0.4 - this.combatIntensity * 0.25;
+            this.arpDelay.feedback.rampTo(feedback, 0.5);
+        }
+
+        // Speed up BPM with intensity (faster during combat, boss fights even faster)
         if (this.initialized) {
-            const targetBPM = 128 + Math.floor(this.combatIntensity * 20);
-            Tone.Transport.bpm.rampTo(targetBPM, 2);
+            let targetBPM = 130 + Math.floor(this.combatIntensity * 25);
+            if (this.isBossFight) {
+                targetBPM += 10; // Extra urgency for boss
+            }
+            Tone.Transport.bpm.rampTo(targetBPM, 1.5);
+        }
+
+        // Adjust synth volumes based on intensity
+        if (this.padSynth) {
+            this.padSynth.volume.rampTo(-12 + this.combatIntensity * 4, 0.5);
+        }
+        if (this.leadSynth) {
+            this.leadSynth.volume.rampTo(-8 + this.combatIntensity * 4, 0.5);
         }
     }
 
     setWaveNumber(wave) {
         this.currentWave = wave;
-        // More intense as waves progress
-        const baseIntensity = Math.min(0.3 + wave * 0.05, 0.8);
+        // More intense as waves progress, boss waves are max intensity
+        const isBossWave = wave % 10 === 0 && wave > 0;
+        const baseIntensity = isBossWave ? 1.0 : Math.min(0.35 + wave * 0.05, 0.85);
         this.setCombatIntensity(baseIntensity);
     }
 
@@ -6993,21 +7383,74 @@ class AudioManager {
         }
     }
 
-    // Gold/coin pickup sound
+    // Gold/coin pickup sound - satisfying chime
     playGoldPickup() {
         this.ensureToneReady();
         try {
+            // Bright metallic coin sound
             const coin = new Tone.MetalSynth({
-                frequency: 400,
-                envelope: { attack: 0.001, decay: 0.1, release: 0.05 },
-                harmonicity: 5,
-                modulationIndex: 20,
-                resonance: 3000,
-                octaves: 1
+                frequency: 800,
+                envelope: { attack: 0.001, decay: 0.15, release: 0.08 },
+                harmonicity: 8,
+                modulationIndex: 25,
+                resonance: 4000,
+                octaves: 1.5
             }).connect(this.sfxGain);
-            coin.volume.value = -10;
-            coin.triggerAttackRelease('16n');
-            setTimeout(() => coin.dispose(), 200);
+            coin.volume.value = -8;
+            coin.triggerAttackRelease('32n');
+
+            // Secondary sparkle
+            const sparkle = new Tone.Synth({
+                oscillator: { type: 'sine' },
+                envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.05 }
+            }).connect(this.sfxGain);
+            sparkle.volume.value = -15;
+            sparkle.triggerAttackRelease(1200 + Math.random() * 400, 0.08);
+
+            setTimeout(() => {
+                coin.dispose();
+                sparkle.dispose();
+            }, 250);
+        } catch (e) {
+            // Silently fail
+        }
+    }
+
+    // Health pickup sound - healing chime
+    playHealthPickup() {
+        this.ensureToneReady();
+        try {
+            // Warm healing tone
+            const heal = new Tone.Synth({
+                oscillator: { type: 'sine' },
+                envelope: { attack: 0.01, decay: 0.3, sustain: 0.1, release: 0.2 }
+            }).connect(this.sfxGain);
+            heal.volume.value = -8;
+            heal.triggerAttackRelease('C5', 0.3);
+
+            // Rising harmony
+            setTimeout(() => {
+                const harmony = new Tone.Synth({
+                    oscillator: { type: 'triangle' },
+                    envelope: { attack: 0.01, decay: 0.25, sustain: 0, release: 0.15 }
+                }).connect(this.sfxGain);
+                harmony.volume.value = -10;
+                harmony.triggerAttackRelease('E5', 0.25);
+                setTimeout(() => harmony.dispose(), 400);
+            }, 80);
+
+            // Final sparkle
+            setTimeout(() => {
+                const sparkle = new Tone.Synth({
+                    oscillator: { type: 'sine' },
+                    envelope: { attack: 0.001, decay: 0.15, sustain: 0, release: 0.1 }
+                }).connect(this.sfxGain);
+                sparkle.volume.value = -12;
+                sparkle.triggerAttackRelease('G5', 0.15);
+                setTimeout(() => sparkle.dispose(), 300);
+            }, 150);
+
+            setTimeout(() => heal.dispose(), 500);
         } catch (e) {
             // Silently fail
         }
@@ -8141,10 +8584,12 @@ class GoldCoin {
     update(deltaTime, elapsedTime) {
         this.age += deltaTime;
 
-        // Physics for initial scatter
+        // Physics for initial scatter - V6.2 FIX: Avoid clone() per-frame
         if (!this.grounded) {
             this.velocity.y += this.gravity * deltaTime;
-            this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
+            this.position.x += this.velocity.x * deltaTime;
+            this.position.y += this.velocity.y * deltaTime;
+            this.position.z += this.velocity.z * deltaTime;
 
             // Ground collision
             if (this.position.y <= 0.2) {
@@ -8587,6 +9032,9 @@ class Tick extends Enemy {
         this.lungeDistance = 4;
         this.lungeDirection = new THREE.Vector3();
 
+        // V6.2 FIX: Reusable vector to avoid per-frame allocations
+        this._toPlayerVec = new THREE.Vector3();
+
         // Animation
         this.legPhase = 0;
         this.clockHandRotation = 0;
@@ -8800,14 +9248,15 @@ class Tick extends Enemy {
         this.trailGear.rotation.x += deltaTime * 2;
         this.trailGear.rotation.y += deltaTime;
 
-        // Direction to player
-        const toPlayer = new THREE.Vector3(
+        // Direction to player - V6.2 FIX: Reuse vector
+        this._toPlayerVec.set(
             playerPosition.x - this.position.x,
             0,
             playerPosition.z - this.position.z
         );
-        const distanceToPlayer = toPlayer.length();
-        toPlayer.normalize();
+        const distanceToPlayer = this._toPlayerVec.length();
+        this._toPlayerVec.normalize();
+        const toPlayer = this._toPlayerVec;
 
         // State machine
         switch (this.state) {
@@ -11004,215 +11453,306 @@ class MinuteMite extends Enemy {
     }
 }
 
-// ─── CHRONOPHAGE PRIME CLASS (Final Boss) ──────────────────────────────────────
-class ChronophagePrime extends Enemy {
-    constructor(scene, position, game) {
+// ─── CHRONOPHAGE BOSS CLASS (V7.2 - Elemental) ─────────────────────────────────
+// Elemental boss with unique attacks per element: Wind, Fire, Ice, Lightning, Void
+class Chronophage extends Enemy {
+    constructor(scene, position, game, bossType = null) {
         super(scene, position);
-        this.game = game; // Reference to game for spawning minions
+        this.game = game;
+        this.isBoss = true;
+        this.bossType = bossType;
 
-        // Enemy name for health bar
-        this.enemyName = 'Chronophage Prime';
-        this.healthBarHeight = 6.0;
+        // Boss name and health bar
+        this.enemyName = bossType ? bossType.name : 'Chronophage';
+        this.healthBarHeight = 5.5;
 
-        // V2: Apply difficulty modifiers
-        const baseDamage = 30;
-        const baseSpeed = 4;
-        const baseHealth = 400; // Final boss - ~16 hits on Normal
-        this.health = getDifficultyValue(baseHealth, 'enemyHealth');
+        // Determine element from boss type
+        this.element = bossType ? bossType.specialAttack : 'TORNADO';
+
+        // Stats - scale by wave
+        const waveMultiplier = game ? 1 + (Math.floor(game.wave / 10) - 1) * 0.3 : 1;
+        const baseDamage = 35;
+        const baseSpeed = 3.0;
+        const baseHealth = 600;
+
+        this.health = getDifficultyValue(baseHealth * waveMultiplier, 'enemyHealth');
         this.maxHealth = this.health;
-        this.damage = getDifficultyValue(baseDamage, 'enemyDamage');
+        this.damage = getDifficultyValue(baseDamage * waveMultiplier, 'enemyDamage');
         this.speed = getDifficultyValue(baseSpeed, 'enemySpeed');
-        this.points = 10000;
+        this.points = 5000;
 
-        // Boss phases
-        this.phase = 1; // 1, 2, or 3
-        this.phaseThresholds = [0.66, 0.33]; // Phase transitions at 66% and 33% HP
+        // Adjust stats per element
+        this.applyElementalStats();
 
-        // State timings - V2: telegraph affected by difficulty
-        const baseSweepTel = 1.0;
-        const basePoundTel = 1.2;
-        const baseSummonTel = 1.5;
+        // State machine with elemental special attack states
         this.stateTimes = {
-            SPAWN: 3.0,
-            IDLE: 1.5,
-            APPROACH: 0, // Continuous
-            SWEEP_TELEGRAPH: getDifficultyValue(baseSweepTel, 'telegraphTime'),
-            SWEEP: 0.8,
-            POUND_TELEGRAPH: getDifficultyValue(basePoundTel, 'telegraphTime'),
-            POUND: 0.5,
-            SUMMON_TELEGRAPH: getDifficultyValue(baseSummonTel, 'telegraphTime'),
-            SUMMON: 0.5,
-            // V3: New attack timings
-            BARRAGE_TELEGRAPH: getDifficultyValue(0.8, 'telegraphTime'),
-            BARRAGE: 2.0, // Fires multiple projectiles over time
-            SWARM_TELEGRAPH: getDifficultyValue(1.0, 'telegraphTime'),
-            SWARM: 0.8, // Larger summon
-            REWIND: 1.5, // Time rewind heal effect
-            RECOVER: 1.5,
-            TRANSITION: 2.0, // Phase transition
-            RAGE: 0 // Final phase continuous
+            SPAWN: 2.5,
+            APPROACH: 0,
+            SWEEP_TELEGRAPH: getDifficultyValue(1.0, 'telegraphTime'),
+            SWEEP_ATTACK: 0.6,
+            SLAM_TELEGRAPH: getDifficultyValue(1.2, 'telegraphTime'),
+            SLAM_ATTACK: 0.5,
+            SHOOT_TELEGRAPH: getDifficultyValue(0.8, 'telegraphTime'),
+            SHOOT_ATTACK: 0.3,
+            BARRAGE_TELEGRAPH: getDifficultyValue(1.0, 'telegraphTime'),
+            BARRAGE_ATTACK: 1.5,
+            SPECIAL_TELEGRAPH: getDifficultyValue(1.2, 'telegraphTime'),
+            SPECIAL_ATTACK: 2.0,
+            RECOVER: 1.2
         };
 
-        // Attack tracking
-        this.attackPattern = ['SWEEP', 'POUND', 'SWEEP', 'SUMMON'];
-        this.phase2Pattern = ['SWEEP', 'BARRAGE', 'POUND', 'SWEEP', 'SUMMON', 'BARRAGE'];
-        this.phase3Pattern = ['SWEEP', 'BARRAGE', 'SWEEP', 'POUND', 'SWARM', 'BARRAGE'];
-        this.currentAttackIndex = 0;
+        this.attackType = 'sweep';
         this.hasHitPlayer = false;
 
-        // V3: Temporal Barrage projectiles
-        this.barrageProjectiles = [];
-        this.barrageFired = 0;
+        // Projectile system
+        this.projectiles = [];
+        this.projectileSpeed = 12;
+        this.projectileDamage = getDifficultyValue(20 * waveMultiplier, 'enemyDamage');
 
-        // Summon tracking
-        this.summonedTicks = [];
-        this.maxSummons = 4;
+        // Shared geometry for projectiles (performance optimization)
+        this.projectileGeometry = new THREE.SphereGeometry(0.3, 8, 8);
 
-        // V3: Time Rewind (Phase 3 heal)
-        this.hasRewindHealed = false;
+        // Minion spawning
+        this.minionSpawnCooldown = 0;
+        this.minionSpawnInterval = 8;
+        this.maxMinions = CONFIG.maxMinionsInBossFight || 4;
 
-        // Time distortion zones (Phase 2+)
-        this.distortionZones = [];
+        // Elemental special attack cooldown
+        this.specialAttackCooldown = 0;
+        this.specialAttackInterval = 12; // Seconds between special attacks
 
-        // Rage mode (Phase 3)
-        this.rageTimer = 0;
-        this.ragePulse = 0;
+        // Reusable vectors to avoid per-frame allocations
+        this._toPlayerVec = new THREE.Vector3();
+        this._projectileDir = new THREE.Vector3();
+
+        // Attack pattern counter for variety
+        this.attackCounter = 0;
+
+        // Element-specific tracking
+        this.tornadoAngle = 0;
+        this.infernoRingCount = 0;
+        this.iceShardCount = 0;
+        this.lightningStrikeCount = 0;
 
         this.createMesh();
         this.createHealthBar();
     }
 
+    applyElementalStats() {
+        // Each element has different combat characteristics
+        switch (this.element) {
+            case 'TORNADO': // Wind - Fast and evasive
+                this.speed *= 1.3;
+                this.projectileSpeed *= 1.2;
+                break;
+            case 'INFERNO': // Fire - High damage
+                this.damage *= 1.2;
+                this.projectileDamage *= 1.3;
+                break;
+            case 'FREEZE': // Ice - Tanky and slows
+                this.health *= 1.2;
+                this.maxHealth = this.health;
+                this.speed *= 0.85;
+                break;
+            case 'STORM': // Lightning - Fast attacks
+                this.stateTimes.SHOOT_TELEGRAPH *= 0.7;
+                this.stateTimes.BARRAGE_TELEGRAPH *= 0.7;
+                break;
+            case 'DEVOUR': // Void/Time Eater - Final boss, all stats boosted
+                this.health *= 1.5;
+                this.maxHealth = this.health;
+                this.damage *= 1.3;
+                this.specialAttackInterval = 10;
+                break;
+        }
+    }
+
     createMesh() {
         this.mesh = new THREE.Group();
 
-        // Materials
+        // Get boss colors (default or from bossType)
+        const colors = this.bossType ? this.bossType.colors : {
+            primary: 0x1a1a2e,
+            secondary: 0xd4af37,
+            glow: 0xff4444,
+            eye: 0xff4444
+        };
+        this.colors = colors; // Store for projectiles
+
+        // Enhanced materials
         const bodyMaterial = new THREE.MeshStandardMaterial({
-            color: 0x1a1a2e,
+            color: colors.primary,
             metalness: 0.7,
-            roughness: 0.3
+            roughness: 0.3,
+            emissive: colors.primary,
+            emissiveIntensity: 0.1
         });
 
         const goldMaterial = new THREE.MeshStandardMaterial({
-            color: 0xd4af37,
-            emissive: 0xd4af37,
-            emissiveIntensity: 0.3,
+            color: colors.secondary,
+            emissive: colors.secondary,
+            emissiveIntensity: 0.4,
             metalness: 0.9,
             roughness: 0.2
         });
 
-        const clockMaterial = new THREE.MeshStandardMaterial({
-            color: 0xeeeedd,
-            metalness: 0.2,
-            roughness: 0.5
+        const eyeMaterial = new THREE.MeshBasicMaterial({
+            color: colors.eye,
+            transparent: true,
+            opacity: 1.0
         });
 
         const glowMaterial = new THREE.MeshBasicMaterial({
-            color: 0xff4444,
+            color: colors.glow,
             transparent: true,
-            opacity: 0.8
+            opacity: 0.6
         });
 
-        // Massive central clock body
-        const bodyGeometry = new THREE.CylinderGeometry(2, 2.5, 1.5, 32);
-        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+        // Main body - larger, more imposing cylinder
+        const bodyGeom = new THREE.CylinderGeometry(1.8, 2.2, 2.5, 16);
+        const body = new THREE.Mesh(bodyGeom, bodyMaterial);
         body.position.y = 2.5;
         body.rotation.x = Math.PI / 2;
+        body.castShadow = true;
         this.mesh.add(body);
         this.body = body;
 
-        // Clock face (front)
-        const faceGeometry = new THREE.CircleGeometry(1.8, 32);
-        const face = new THREE.Mesh(faceGeometry, clockMaterial);
+        // Outer ring around body
+        const outerRingGeom = new THREE.TorusGeometry(2.0, 0.15, 8, 24);
+        const outerRing = new THREE.Mesh(outerRingGeom, goldMaterial);
+        outerRing.position.y = 2.5;
+        outerRing.rotation.x = Math.PI / 2;
+        this.mesh.add(outerRing);
+        this.outerRing = outerRing;
+
+        // Clock face - larger and more detailed
+        const faceGeom = new THREE.CircleGeometry(1.6, 24);
+        const faceMat = new THREE.MeshStandardMaterial({
+            color: 0xeeeedd,
+            metalness: 0.1,
+            roughness: 0.8
+        });
+        const face = new THREE.Mesh(faceGeom, faceMat);
         face.position.set(0, 2.5, 1.3);
         this.mesh.add(face);
-        this.face = face;
 
         // Clock rim
-        const rimGeometry = new THREE.TorusGeometry(1.9, 0.15, 16, 64);
-        const rim = new THREE.Mesh(rimGeometry, goldMaterial);
-        rim.position.set(0, 2.5, 1.3);
+        const rimGeom = new THREE.TorusGeometry(1.6, 0.12, 8, 24);
+        const rim = new THREE.Mesh(rimGeom, goldMaterial);
+        rim.position.set(0, 2.5, 1.25);
         this.mesh.add(rim);
 
-        // Clock hands (animated)
-        const hourHandGeom = new THREE.BoxGeometry(0.15, 0.8, 0.05);
-        const hourHand = new THREE.Mesh(hourHandGeom, bodyMaterial);
-        hourHand.position.set(0, 2.9, 1.35);
-        this.mesh.add(hourHand);
-        this.hourHand = hourHand;
-
-        const minuteHandGeom = new THREE.BoxGeometry(0.1, 1.2, 0.05);
-        const minuteHand = new THREE.Mesh(minuteHandGeom, bodyMaterial);
-        minuteHand.position.set(0, 2.9, 1.4);
-        this.mesh.add(minuteHand);
-        this.minuteHand = minuteHand;
-
-        // Central eye
-        const eyeGeometry = new THREE.SphereGeometry(0.3, 16, 16);
-        const eye = new THREE.Mesh(eyeGeometry, glowMaterial);
-        eye.position.set(0, 2.5, 1.5);
-        this.mesh.add(eye);
-        this.eye = eye;
-
-        // Massive arms (sweeping appendages)
-        const armGeometry = new THREE.BoxGeometry(3, 0.3, 0.2);
-
-        const leftArm = new THREE.Mesh(armGeometry, goldMaterial);
-        leftArm.position.set(-2.5, 2.5, 0);
-        this.mesh.add(leftArm);
-        this.leftArm = leftArm;
-
-        const rightArm = new THREE.Mesh(armGeometry, goldMaterial);
-        rightArm.position.set(2.5, 2.5, 0);
-        this.mesh.add(rightArm);
-        this.rightArm = rightArm;
-
-        // Clawed hands at arm ends
-        for (let side = -1; side <= 1; side += 2) {
-            for (let i = 0; i < 3; i++) {
-                const clawGeom = new THREE.ConeGeometry(0.15, 0.6, 4);
-                const claw = new THREE.Mesh(clawGeom, goldMaterial);
-                claw.position.set(side * 4.2, 2.5 + (i - 1) * 0.3, 0);
-                claw.rotation.z = side * Math.PI / 2;
-                this.mesh.add(claw);
-            }
+        // Hour markers (12 marks around the clock)
+        for (let i = 0; i < 12; i++) {
+            const angle = (i / 12) * Math.PI * 2;
+            const markerGeom = new THREE.BoxGeometry(0.08, 0.15, 0.02);
+            const marker = new THREE.Mesh(markerGeom, goldMaterial);
+            marker.position.set(
+                Math.sin(angle) * 1.35,
+                2.5 + Math.cos(angle) * 1.35,
+                1.32
+            );
+            marker.rotation.z = -angle;
+            this.mesh.add(marker);
         }
 
-        // Lower body / base (floating gears)
-        const baseGeometry = new THREE.TorusGeometry(1.5, 0.3, 8, 32);
-        const base = new THREE.Mesh(baseGeometry, goldMaterial);
-        base.position.y = 0.8;
-        base.rotation.x = Math.PI / 2;
-        this.mesh.add(base);
+        // Clock hands - more ornate
+        const hourHandGeom = new THREE.BoxGeometry(0.12, 0.7, 0.04);
+        this.hourHand = new THREE.Mesh(hourHandGeom, goldMaterial);
+        this.hourHand.position.set(0, 2.85, 1.35);
+        this.mesh.add(this.hourHand);
+
+        const minuteHandGeom = new THREE.BoxGeometry(0.08, 1.0, 0.04);
+        this.minuteHand = new THREE.Mesh(minuteHandGeom, goldMaterial);
+        this.minuteHand.position.set(0, 3.0, 1.37);
+        this.mesh.add(this.minuteHand);
+
+        // Central eye - larger and more prominent
+        const eyeGeom = new THREE.SphereGeometry(0.35, 12, 12);
+        this.eye = new THREE.Mesh(eyeGeom, eyeMaterial);
+        this.eye.position.set(0, 2.5, 1.45);
+        this.mesh.add(this.eye);
+
+        // Eye glow ring
+        const eyeGlowGeom = new THREE.TorusGeometry(0.4, 0.08, 8, 16);
+        const eyeGlow = new THREE.Mesh(eyeGlowGeom, glowMaterial);
+        eyeGlow.position.set(0, 2.5, 1.4);
+        this.mesh.add(eyeGlow);
+        this.eyeGlow = eyeGlow;
+
+        // Arms - more detailed with segments
+        const upperArmGeom = new THREE.BoxGeometry(1.5, 0.35, 0.2);
+        const lowerArmGeom = new THREE.BoxGeometry(1.2, 0.25, 0.15);
+        const handGeom = new THREE.SphereGeometry(0.25, 8, 8);
+
+        // Left arm assembly
+        this.leftArm = new THREE.Group();
+        const leftUpper = new THREE.Mesh(upperArmGeom, goldMaterial);
+        leftUpper.position.x = -0.75;
+        this.leftArm.add(leftUpper);
+        const leftLower = new THREE.Mesh(lowerArmGeom, bodyMaterial);
+        leftLower.position.x = -1.9;
+        this.leftArm.add(leftLower);
+        const leftHand = new THREE.Mesh(handGeom, glowMaterial);
+        leftHand.position.x = -2.7;
+        this.leftArm.add(leftHand);
+        this.leftHand = leftHand;
+        this.leftArm.position.set(-0.5, 2.5, 0);
+        this.mesh.add(this.leftArm);
+
+        // Right arm assembly
+        this.rightArm = new THREE.Group();
+        const rightUpper = new THREE.Mesh(upperArmGeom, goldMaterial);
+        rightUpper.position.x = 0.75;
+        this.rightArm.add(rightUpper);
+        const rightLower = new THREE.Mesh(lowerArmGeom, bodyMaterial);
+        rightLower.position.x = 1.9;
+        this.rightArm.add(rightLower);
+        const rightHand = new THREE.Mesh(handGeom, glowMaterial);
+        rightHand.position.x = 2.7;
+        this.rightArm.add(rightHand);
+        this.rightHand = rightHand;
+        this.rightArm.position.set(0.5, 2.5, 0);
+        this.mesh.add(this.rightArm);
 
         // Floating gear rings
-        for (let i = 0; i < 3; i++) {
-            const gearGeom = new THREE.TorusGeometry(0.8 + i * 0.4, 0.08, 8, 16);
-            const gear = new THREE.Mesh(gearGeom, bodyMaterial);
-            gear.position.y = 0.3 - i * 0.2;
-            gear.rotation.x = Math.PI / 2;
-            gear.userData.rotSpeed = (i % 2 === 0 ? 1 : -1) * (0.5 + i * 0.2);
-            this.mesh.add(gear);
+        const gearGeom = new THREE.TorusGeometry(2.8, 0.1, 6, 24);
+        this.gearRing1 = new THREE.Mesh(gearGeom, goldMaterial);
+        this.gearRing1.position.y = 2.5;
+        this.gearRing1.rotation.x = Math.PI / 2;
+        this.gearRing1.rotation.z = 0.3;
+        this.mesh.add(this.gearRing1);
+
+        const gearGeom2 = new THREE.TorusGeometry(3.2, 0.08, 6, 24);
+        this.gearRing2 = new THREE.Mesh(gearGeom2, goldMaterial);
+        this.gearRing2.position.y = 2.5;
+        this.gearRing2.rotation.x = Math.PI / 2 + 0.2;
+        this.gearRing2.rotation.z = -0.4;
+        this.mesh.add(this.gearRing2);
+
+        // Base platform
+        const baseGeom = new THREE.CylinderGeometry(1.5, 1.8, 0.3, 16);
+        const base = new THREE.Mesh(baseGeom, bodyMaterial);
+        base.position.y = 0.15;
+        this.mesh.add(base);
+
+        // Base ring
+        const baseRingGeom = new THREE.TorusGeometry(1.6, 0.15, 8, 24);
+        const baseRing = new THREE.Mesh(baseRingGeom, goldMaterial);
+        baseRing.position.y = 0.3;
+        baseRing.rotation.x = Math.PI / 2;
+        this.mesh.add(baseRing);
+
+        // Point light (medium+ quality)
+        const maxLights = getGraphicsSetting('maxDynamicLights') || 0;
+        if (maxLights >= 4) {
+            this.bossLight = new THREE.PointLight(colors.glow, 1.0, 12);
+            this.bossLight.position.y = 2.5;
+            this.mesh.add(this.bossLight);
         }
-
-        // Boss glow
-        const bossLight = new THREE.PointLight(0xff4444, 1, 15);
-        bossLight.position.y = 2.5;
-        this.mesh.add(bossLight);
-        this.bossLight = bossLight;
-
-        // Secondary lights
-        const goldLight1 = new THREE.PointLight(0xd4af37, 0.8, 8);
-        goldLight1.position.set(-3, 2.5, 0);
-        this.mesh.add(goldLight1);
-
-        const goldLight2 = new THREE.PointLight(0xd4af37, 0.8, 8);
-        goldLight2.position.set(3, 2.5, 0);
-        this.mesh.add(goldLight2);
 
         this.mesh.position.copy(this.position);
         this.scene.add(this.mesh);
-
-        // Start with scale 0 for spawn animation
         this.mesh.scale.set(0.01, 0.01, 0.01);
     }
 
@@ -11227,683 +11767,964 @@ class ChronophagePrime extends Enemy {
         this.stateTimer += deltaTime;
         this.updateFlash(deltaTime);
 
-        // Animate clock hands
-        this.hourHand.rotation.z = -this.stateTimer * 0.1;
-        this.minuteHand.rotation.z = -this.stateTimer * 0.5;
+        // Animated clock hands
+        this.hourHand.rotation.z = this.stateTimer * 0.5;
+        this.minuteHand.rotation.z = this.stateTimer * 2;
 
-        // Animate floating gears
-        this.mesh.children.forEach(child => {
-            if (child.userData.rotSpeed) {
-                child.rotation.z += child.userData.rotSpeed * deltaTime;
-            }
-        });
+        // Rotating gear rings
+        if (this.gearRing1) this.gearRing1.rotation.z += deltaTime * 0.3;
+        if (this.gearRing2) this.gearRing2.rotation.z -= deltaTime * 0.2;
 
-        // Face player
-        const toPlayer = new THREE.Vector3(
+        // Pulsing eye glow
+        if (this.eyeGlow) {
+            const pulse = 0.5 + Math.sin(this.stateTimer * 3) * 0.2;
+            this.eyeGlow.material.opacity = pulse;
+        }
+
+        // Direction to player (using reusable vector)
+        this._toPlayerVec.set(
             playerPosition.x - this.position.x,
             0,
             playerPosition.z - this.position.z
         );
-        const distanceToPlayer = toPlayer.length();
-        toPlayer.normalize();
+        const distanceToPlayer = this._toPlayerVec.length();
+        this._toPlayerVec.normalize();
 
-        this.rotation = Math.atan2(toPlayer.x, toPlayer.z);
+        // Face player
+        this.rotation = Math.atan2(this._toPlayerVec.x, this._toPlayerVec.z);
         this.mesh.rotation.y = this.rotation;
 
-        // Phase checks
-        this.checkPhaseTransition();
+        // Update projectiles
+        this.updateProjectiles(deltaTime, playerPosition);
 
-        // Update distortion zones
-        this.updateDistortionZones(deltaTime);
+        // Update minion spawning
+        this.updateMinionSpawning(deltaTime);
 
-        // State machine
+        // State machine with shooting attacks
         switch (this.state) {
             case 'SPAWN':
                 this.updateSpawn(deltaTime);
                 break;
-            case 'IDLE':
-                this.updateIdle(deltaTime, distanceToPlayer);
-                break;
             case 'APPROACH':
-                this.updateApproach(deltaTime, toPlayer, distanceToPlayer);
+                this.updateApproach(deltaTime, this._toPlayerVec, distanceToPlayer);
                 break;
             case 'SWEEP_TELEGRAPH':
-                this.updateSweepTelegraph(deltaTime);
+                this.updateSweepTelegraph(deltaTime, this._toPlayerVec);
                 break;
-            case 'SWEEP':
-                this.updateSweep(deltaTime);
+            case 'SWEEP_ATTACK':
+                this.updateSweepAttack(deltaTime);
                 break;
-            case 'POUND_TELEGRAPH':
-                this.updatePoundTelegraph(deltaTime);
+            case 'SLAM_TELEGRAPH':
+                this.updateSlamTelegraph(deltaTime);
                 break;
-            case 'POUND':
-                this.updatePound(deltaTime, playerPosition);
+            case 'SLAM_ATTACK':
+                this.updateSlamAttack(deltaTime);
                 break;
-            case 'SUMMON_TELEGRAPH':
-                this.updateSummonTelegraph(deltaTime);
+            case 'SHOOT_TELEGRAPH':
+                this.updateShootTelegraph(deltaTime, playerPosition);
                 break;
-            case 'SUMMON':
-                this.updateSummon(deltaTime);
+            case 'SHOOT_ATTACK':
+                this.updateShootAttack(deltaTime, playerPosition);
                 break;
-            // V3: New attacks
             case 'BARRAGE_TELEGRAPH':
                 this.updateBarrageTelegraph(deltaTime);
                 break;
-            case 'BARRAGE':
-                this.updateBarrage(deltaTime, playerPosition);
+            case 'BARRAGE_ATTACK':
+                this.updateBarrageAttack(deltaTime, playerPosition);
                 break;
-            case 'SWARM_TELEGRAPH':
-                this.updateSwarmTelegraph(deltaTime);
+            case 'SPECIAL_TELEGRAPH':
+                this.updateSpecialTelegraph(deltaTime);
                 break;
-            case 'SWARM':
-                this.updateSwarm(deltaTime);
-                break;
-            case 'REWIND':
-                this.updateRewind(deltaTime);
+            case 'SPECIAL_ATTACK':
+                this.updateSpecialAttack(deltaTime, playerPosition);
                 break;
             case 'RECOVER':
                 this.updateRecover(deltaTime);
                 break;
-            case 'TRANSITION':
-                this.updateTransition(deltaTime);
-                break;
+        }
+
+        // Update special attack cooldown
+        if (this.specialAttackCooldown > 0) {
+            this.specialAttackCooldown -= deltaTime;
         }
 
         this.mesh.position.x = this.position.x;
         this.mesh.position.z = this.position.z;
-
-        // Hover animation
-        this.mesh.position.y = Math.sin(this.stateTimer * 2) * 0.2;
-
-        // Update health bar position
         this.updateHealthBar();
-    }
-
-    checkPhaseTransition() {
-        const healthPercent = this.health / this.maxHealth;
-
-        if (this.phase === 1 && healthPercent <= this.phaseThresholds[0]) {
-            this.startPhaseTransition(2);
-        } else if (this.phase === 2 && healthPercent <= this.phaseThresholds[1]) {
-            this.startPhaseTransition(3);
-        }
-    }
-
-    startPhaseTransition(newPhase) {
-        this.phase = newPhase;
-        this.stateTimer = 0;
-
-        // V3: Time Rewind - heal 15% on Phase 3 transition
-        if (newPhase === 3 && !this.hasRewindHealed) {
-            this.hasRewindHealed = true;
-            this.state = 'REWIND';
-            // Will heal during REWIND state
-        } else {
-            this.state = 'TRANSITION';
-        }
-
-        // Visual feedback
-        this.bossLight.color.setHex(newPhase === 2 ? 0xff8844 : 0xff0000);
-        this.bossLight.intensity = 2;
-
-        // Spawn distortion zones in Phase 2+
-        if (newPhase >= 2) {
-            this.createDistortionZone();
-        }
     }
 
     updateSpawn(deltaTime) {
         const progress = this.stateTimer / this.stateTimes.SPAWN;
         this.mesh.scale.setScalar(Math.min(1, progress));
 
-        // Dramatic spawn effect
-        this.bossLight.intensity = 1 + Math.sin(this.stateTimer * 10) * 0.5;
-
         if (this.stateTimer >= this.stateTimes.SPAWN) {
-            this.mesh.scale.setScalar(1);
-            this.state = 'IDLE';
-            this.stateTimer = 0;
-        }
-    }
-
-    updateIdle(deltaTime, distanceToPlayer) {
-        // Speed up in later phases
-        const idleTime = this.stateTimes.IDLE / this.phase;
-
-        if (this.stateTimer >= idleTime) {
-            if (distanceToPlayer > 8) {
-                this.state = 'APPROACH';
-            } else {
-                this.startNextAttack();
-            }
+            this.state = 'APPROACH';
             this.stateTimer = 0;
         }
     }
 
     updateApproach(deltaTime, toPlayer, distanceToPlayer) {
-        const speed = this.speed * (this.phase === 3 ? 1.5 : 1);
-        this.position.x += toPlayer.x * speed * deltaTime;
-        this.position.z += toPlayer.z * speed * deltaTime;
+        // Move toward player if far away
+        if (distanceToPlayer > 6) {
+            this.position.x += toPlayer.x * this.speed * deltaTime;
+            this.position.z += toPlayer.z * this.speed * deltaTime;
+        }
 
-        if (distanceToPlayer <= 8) {
-            this.startNextAttack();
+        // Check for elemental special attack (priority if off cooldown)
+        if (this.specialAttackCooldown <= 0 && distanceToPlayer < 15) {
+            this.attackType = 'special';
+            this.state = 'SPECIAL_TELEGRAPH';
             this.stateTimer = 0;
-        }
-    }
-
-    startNextAttack() {
-        // V3: Phase-specific attack patterns
-        let pattern;
-        if (this.phase === 3) {
-            pattern = this.phase3Pattern;
-        } else if (this.phase === 2) {
-            pattern = this.phase2Pattern;
-        } else {
-            pattern = this.attackPattern;
+            this.hasHitPlayer = false;
+            this.specialAttackCooldown = this.specialAttackInterval;
+            return;
         }
 
-        const attack = pattern[this.currentAttackIndex % pattern.length];
-        this.currentAttackIndex++;
+        // Choose attack based on distance and pattern
+        this.attackCounter++;
 
-        this.state = attack + '_TELEGRAPH';
-        this.stateTimer = 0;
-        this.hasHitPlayer = false;
-        this.barrageFired = 0; // Reset barrage counter
-    }
-
-    updateSweepTelegraph(deltaTime) {
-        const progress = this.stateTimer / (this.stateTimes.SWEEP_TELEGRAPH / this.phase);
-
-        // Raise arms
-        this.leftArm.rotation.z = progress * 0.5;
-        this.rightArm.rotation.z = -progress * 0.5;
-
-        // Glow warning
-        this.bossLight.intensity = 1 + progress;
-
-        if (this.stateTimer >= this.stateTimes.SWEEP_TELEGRAPH / this.phase) {
-            this.state = 'SWEEP';
-            this.stateTimer = 0;
-        }
-    }
-
-    updateSweep(deltaTime) {
-        const progress = this.stateTimer / this.stateTimes.SWEEP;
-
-        // Sweep arms down
-        this.leftArm.rotation.z = 0.5 - progress * 1.5;
-        this.rightArm.rotation.z = -0.5 + progress * 1.5;
-
-        if (this.stateTimer >= this.stateTimes.SWEEP) {
-            this.state = 'RECOVER';
-            this.stateTimer = 0;
-            this.leftArm.rotation.z = 0;
-            this.rightArm.rotation.z = 0;
-        }
-    }
-
-    updatePoundTelegraph(deltaTime) {
-        const progress = this.stateTimer / (this.stateTimes.POUND_TELEGRAPH / this.phase);
-
-        // Rise up
-        this.mesh.position.y = progress * 3;
-
-        // Both arms up
-        this.leftArm.rotation.z = progress * 1.5;
-        this.rightArm.rotation.z = -progress * 1.5;
-
-        this.bossLight.intensity = 1 + progress * 2;
-
-        if (this.stateTimer >= this.stateTimes.POUND_TELEGRAPH / this.phase) {
-            this.state = 'POUND';
-            this.stateTimer = 0;
-        }
-    }
-
-    updatePound(deltaTime, playerPosition) {
-        const progress = this.stateTimer / this.stateTimes.POUND;
-
-        // Slam down
-        this.mesh.position.y = 3 * (1 - progress * 2);
-        if (this.mesh.position.y < 0) this.mesh.position.y = 0;
-
-        // Arms slam
-        this.leftArm.rotation.z = 1.5 - progress * 3;
-        this.rightArm.rotation.z = -1.5 + progress * 3;
-
-        if (this.stateTimer >= this.stateTimes.POUND) {
-            this.state = 'RECOVER';
-            this.stateTimer = 0;
-            this.leftArm.rotation.z = 0;
-            this.rightArm.rotation.z = 0;
-
-            // Create shockwave effect at impact
-            this.createShockwave();
-        }
-    }
-
-    createShockwave() {
-        const shockwaveGeom = new THREE.RingGeometry(0.5, 1.5, 32);
-        const shockwaveMat = new THREE.MeshBasicMaterial({
-            color: 0xd4af37,
-            transparent: true,
-            opacity: 0.8,
-            side: THREE.DoubleSide
-        });
-        const shockwave = new THREE.Mesh(shockwaveGeom, shockwaveMat);
-        shockwave.position.copy(this.position);
-        shockwave.position.y = 0.1;
-        shockwave.rotation.x = -Math.PI / 2;
-        this.scene.add(shockwave);
-
-        // Store for animation
-        if (!this.shockwaves) this.shockwaves = [];
-        this.shockwaves.push({ mesh: shockwave, timer: 0 });
-    }
-
-    updateSummonTelegraph(deltaTime) {
-        const progress = this.stateTimer / this.stateTimes.SUMMON_TELEGRAPH;
-
-        // Glow intensifies
-        this.bossLight.intensity = 1 + progress * 2;
-        this.eye.material.opacity = 0.8 + Math.sin(this.stateTimer * 20) * 0.2;
-
-        if (this.stateTimer >= this.stateTimes.SUMMON_TELEGRAPH) {
-            this.state = 'SUMMON';
-            this.stateTimer = 0;
-        }
-    }
-
-    updateSummon(deltaTime) {
-        // Spawn Ticks around the boss
-        if (this.stateTimer < deltaTime * 2 && this.game) {
-            const tickCount = Math.min(this.maxSummons, 2 + this.phase);
-            for (let i = 0; i < tickCount; i++) {
-                const angle = (i / tickCount) * Math.PI * 2;
-                const dist = 5;
-                const pos = new THREE.Vector3(
-                    this.position.x + Math.cos(angle) * dist,
-                    0,
-                    this.position.z + Math.sin(angle) * dist
-                );
-                this.game.spawnEnemy('tick', pos);
+        if (distanceToPlayer <= 6) {
+            // Close range - melee attacks
+            const roll = Math.random();
+            if (roll < 0.4) {
+                this.attackType = 'sweep';
+                this.state = 'SWEEP_TELEGRAPH';
+            } else if (roll < 0.8) {
+                this.attackType = 'slam';
+                this.state = 'SLAM_TELEGRAPH';
+            } else {
+                this.attackType = 'shoot';
+                this.state = 'SHOOT_TELEGRAPH';
             }
-        }
-
-        if (this.stateTimer >= this.stateTimes.SUMMON) {
-            this.state = 'RECOVER';
             this.stateTimer = 0;
-        }
-    }
-
-    // V3: Temporal Barrage Telegraph
-    updateBarrageTelegraph(deltaTime) {
-        const progress = this.stateTimer / this.stateTimes.BARRAGE_TELEGRAPH;
-
-        // Eye glows intensely
-        this.eye.material.opacity = 0.8 + Math.sin(this.stateTimer * 15) * 0.2;
-        this.bossLight.intensity = 1 + progress * 2;
-        this.bossLight.color.setHex(0xff00ff); // Purple for barrage
-
-        if (this.stateTimer >= this.stateTimes.BARRAGE_TELEGRAPH) {
-            this.state = 'BARRAGE';
-            this.stateTimer = 0;
-            this.barrageFired = 0;
-        }
-    }
-
-    // V3: Temporal Barrage - fires multiple projectiles
-    updateBarrage(deltaTime, playerPosition) {
-        const projectileCount = this.phase === 3 ? 8 : 5;
-        const fireInterval = this.stateTimes.BARRAGE / projectileCount;
-
-        // Fire projectiles at intervals
-        const shouldFire = Math.floor(this.stateTimer / fireInterval);
-        while (this.barrageFired < shouldFire && this.barrageFired < projectileCount) {
-            this.fireBarrageProjectile(playerPosition);
-            this.barrageFired++;
-        }
-
-        // Update existing projectiles
-        this.updateBarrageProjectiles(deltaTime, playerPosition);
-
-        if (this.stateTimer >= this.stateTimes.BARRAGE) {
-            this.state = 'RECOVER';
-            this.stateTimer = 0;
-            this.bossLight.color.setHex(this.phase === 3 ? 0xff0000 : 0xff8844);
-        }
-    }
-
-    fireBarrageProjectile(playerPosition) {
-        const projGeom = new THREE.SphereGeometry(0.3, 8, 8);
-        const projMat = new THREE.MeshBasicMaterial({
-            color: 0xff00ff,
-            transparent: true,
-            opacity: 0.9
-        });
-        const proj = new THREE.Mesh(projGeom, projMat);
-
-        // Start from boss eye position
-        proj.position.set(this.position.x, 2.5, this.position.z);
-
-        // Direction toward player with slight spread
-        const spread = (Math.random() - 0.5) * 0.3;
-        const direction = new THREE.Vector3(
-            playerPosition.x - this.position.x + spread * 5,
-            0,
-            playerPosition.z - this.position.z + spread * 5
-        ).normalize();
-
-        // Add point light
-        const light = new THREE.PointLight(0xff00ff, 0.5, 3);
-        proj.add(light);
-
-        this.scene.add(proj);
-        this.barrageProjectiles.push({
-            mesh: proj,
-            direction: direction,
-            speed: 15,
-            timer: 0
-        });
-    }
-
-    updateBarrageProjectiles(deltaTime, playerPosition) {
-        for (let i = this.barrageProjectiles.length - 1; i >= 0; i--) {
-            const proj = this.barrageProjectiles[i];
-            proj.timer += deltaTime;
-
-            // Move projectile
-            proj.mesh.position.x += proj.direction.x * proj.speed * deltaTime;
-            proj.mesh.position.z += proj.direction.z * proj.speed * deltaTime;
-
-            // Remove if too old or out of arena
-            const distFromCenter = Math.sqrt(
-                proj.mesh.position.x * proj.mesh.position.x +
-                proj.mesh.position.z * proj.mesh.position.z
-            );
-
-            if (proj.timer > 3 || distFromCenter > CONFIG.arenaRadius + 5) {
-                this.scene.remove(proj.mesh);
-                proj.mesh.geometry.dispose();
-                proj.mesh.material.dispose();
-                this.barrageProjectiles.splice(i, 1);
+            this.hasHitPlayer = false;
+        } else if (distanceToPlayer > 8 && distanceToPlayer < 20) {
+            // Mid-range - prefer shooting attacks
+            const roll = Math.random();
+            if (roll < 0.5) {
+                this.attackType = 'shoot';
+                this.state = 'SHOOT_TELEGRAPH';
+            } else if (roll < 0.8) {
+                this.attackType = 'barrage';
+                this.state = 'BARRAGE_TELEGRAPH';
+            } else {
+                this.position.x += toPlayer.x * this.speed * deltaTime;
+                this.position.z += toPlayer.z * this.speed * deltaTime;
+                return;
             }
+            this.stateTimer = 0;
+            this.hasHitPlayer = false;
         }
     }
 
-    // V3: Swarm Telegraph (bigger summon)
-    updateSwarmTelegraph(deltaTime) {
-        const progress = this.stateTimer / this.stateTimes.SWARM_TELEGRAPH;
+    updateSweepTelegraph(deltaTime, toPlayer) {
+        const progress = this.stateTimer / this.stateTimes.SWEEP_TELEGRAPH;
+        this.rightArm.rotation.z = -0.3 - progress * 1.5;
+        this.rightArm.position.y = 2 + progress * 0.5;
 
-        this.bossLight.intensity = 1 + progress * 3;
-        this.eye.material.opacity = 0.8 + Math.sin(this.stateTimer * 20) * 0.2;
-
-        // Arms raise dramatically
-        this.leftArm.rotation.z = progress * 1.0;
-        this.rightArm.rotation.z = -progress * 1.0;
-
-        if (this.stateTimer >= this.stateTimes.SWARM_TELEGRAPH) {
-            this.state = 'SWARM';
+        if (this.stateTimer >= this.stateTimes.SWEEP_TELEGRAPH) {
+            this.state = 'SWEEP_ATTACK';
             this.stateTimer = 0;
         }
     }
 
-    // V3: Swarm - spawn many enemies at once
-    updateSwarm(deltaTime) {
-        if (this.stateTimer < deltaTime * 2 && this.game) {
-            // Spawn 6-8 enemies based on phase
-            const swarmCount = 6 + this.phase;
-            for (let i = 0; i < swarmCount; i++) {
-                const angle = (i / swarmCount) * Math.PI * 2 + Math.random() * 0.3;
-                const dist = 6 + Math.random() * 4;
-                const pos = new THREE.Vector3(
-                    this.position.x + Math.cos(angle) * dist,
-                    0,
-                    this.position.z + Math.sin(angle) * dist
-                );
-                // Mix of tick and tock
-                const type = Math.random() < 0.7 ? 'tick' : 'tock';
-                this.game.spawnEnemy(type, pos);
-            }
-        }
+    updateSweepAttack(deltaTime) {
+        const progress = this.stateTimer / this.stateTimes.SWEEP_ATTACK;
+        this.rightArm.rotation.z = -1.8 + progress * 3.6;
 
-        // Reset arm position
-        this.leftArm.rotation.z = 0;
-        this.rightArm.rotation.z = 0;
-
-        if (this.stateTimer >= this.stateTimes.SWARM) {
+        if (this.stateTimer >= this.stateTimes.SWEEP_ATTACK) {
             this.state = 'RECOVER';
             this.stateTimer = 0;
         }
     }
 
-    // V3: Time Rewind - heal effect during Phase 3 transition
-    updateRewind(deltaTime) {
-        const progress = this.stateTimer / this.stateTimes.REWIND;
+    updateSlamTelegraph(deltaTime) {
+        const progress = this.stateTimer / this.stateTimes.SLAM_TELEGRAPH;
+        this.leftArm.rotation.z = 0.3 + progress * 2;
+        this.rightArm.rotation.z = -0.3 - progress * 2;
+        this.leftArm.position.y = 2 + progress;
+        this.rightArm.position.y = 2 + progress;
 
-        // Dramatic visual effect
-        this.bossLight.intensity = 3 + Math.sin(progress * Math.PI * 8) * 2;
-        this.bossLight.color.setHex(0x00ffff); // Cyan for time rewind
-
-        // Heal 15% of max health over the duration
-        const healPerSecond = (this.maxHealth * 0.15) / this.stateTimes.REWIND;
-        this.health = Math.min(this.health + healPerSecond * deltaTime, this.maxHealth);
-
-        // Spin effect
-        this.mesh.rotation.y += deltaTime * 10;
-
-        // Visual pulse
-        const pulse = 1 + Math.sin(progress * Math.PI * 4) * 0.15;
-        this.mesh.scale.setScalar(pulse);
-
-        if (this.stateTimer >= this.stateTimes.REWIND) {
-            this.state = 'TRANSITION';
+        if (this.stateTimer >= this.stateTimes.SLAM_TELEGRAPH) {
+            this.state = 'SLAM_ATTACK';
             this.stateTimer = 0;
-            this.mesh.scale.setScalar(1);
-            this.bossLight.color.setHex(0xff0000);
+        }
+    }
+
+    updateSlamAttack(deltaTime) {
+        const progress = this.stateTimer / this.stateTimes.SLAM_ATTACK;
+        this.leftArm.rotation.z = 2.3 - progress * 2;
+        this.rightArm.rotation.z = -2.3 + progress * 2;
+        this.leftArm.position.y = 3 - progress * 2;
+        this.rightArm.position.y = 3 - progress * 2;
+
+        if (this.stateTimer >= this.stateTimes.SLAM_ATTACK) {
+            this.state = 'RECOVER';
+            this.stateTimer = 0;
         }
     }
 
     updateRecover(deltaTime) {
-        const recoverTime = this.stateTimes.RECOVER / (this.phase === 3 ? 2 : 1);
-        this.bossLight.intensity = 1;
+        const progress = this.stateTimer / this.stateTimes.RECOVER;
+        this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, 0, progress);
+        this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, 0, progress);
+        this.leftArm.position.y = THREE.MathUtils.lerp(this.leftArm.position.y, 2.5, progress);
+        this.rightArm.position.y = THREE.MathUtils.lerp(this.rightArm.position.y, 2.5, progress);
 
-        if (this.stateTimer >= recoverTime) {
-            this.state = 'IDLE';
+        if (this.stateTimer >= this.stateTimes.RECOVER) {
+            this.state = 'APPROACH';
             this.stateTimer = 0;
         }
     }
 
-    updateTransition(deltaTime) {
-        const progress = this.stateTimer / this.stateTimes.TRANSITION;
+    // ─── SHOOTING ATTACK METHODS ─────────────────────────────────────────────────
 
-        // Dramatic pulsing
-        const pulse = Math.sin(progress * Math.PI * 6);
-        this.mesh.scale.setScalar(1 + pulse * 0.1);
-        this.bossLight.intensity = 2 + pulse;
+    updateShootTelegraph(deltaTime, playerPosition) {
+        const progress = this.stateTimer / this.stateTimes.SHOOT_TELEGRAPH;
 
-        if (this.stateTimer >= this.stateTimes.TRANSITION) {
-            this.state = 'IDLE';
+        // Raise both arms and point at player
+        this.leftArm.rotation.z = progress * 1.5;
+        this.rightArm.rotation.z = -progress * 1.5;
+
+        // Eye pulses faster as telegraph completes
+        if (this.eye) {
+            const pulse = 1 + Math.sin(this.stateTimer * 15) * 0.3 * progress;
+            this.eye.scale.setScalar(pulse);
+        }
+
+        if (this.stateTimer >= this.stateTimes.SHOOT_TELEGRAPH) {
+            this.state = 'SHOOT_ATTACK';
             this.stateTimer = 0;
-            this.mesh.scale.setScalar(1);
-            this.bossLight.intensity = 1;
+            this.fireProjectile(playerPosition);
         }
     }
 
-    createDistortionZone() {
-        // Create a time distortion zone
-        const zoneGeom = new THREE.CylinderGeometry(4, 4, 0.2, 32);
-        const zoneMat = new THREE.MeshBasicMaterial({
-            color: 0x8844ff,
+    updateShootAttack(deltaTime, playerPosition) {
+        const progress = this.stateTimer / this.stateTimes.SHOOT_ATTACK;
+
+        // Recoil animation
+        this.leftArm.rotation.z = 1.5 - progress * 1.5;
+        this.rightArm.rotation.z = -1.5 + progress * 1.5;
+
+        if (this.stateTimer >= this.stateTimes.SHOOT_ATTACK) {
+            this.state = 'RECOVER';
+            this.stateTimer = 0;
+        }
+    }
+
+    updateBarrageTelegraph(deltaTime) {
+        const progress = this.stateTimer / this.stateTimes.BARRAGE_TELEGRAPH;
+
+        // Spin up animation - arms spread wide
+        this.leftArm.rotation.z = progress * 2.5;
+        this.rightArm.rotation.z = -progress * 2.5;
+
+        // Gear rings spin faster
+        if (this.gearRing1) this.gearRing1.rotation.z += deltaTime * (0.3 + progress * 2);
+        if (this.gearRing2) this.gearRing2.rotation.z -= deltaTime * (0.2 + progress * 2);
+
+        // Eye glows brighter
+        if (this.eyeGlow) {
+            this.eyeGlow.material.opacity = 0.5 + progress * 0.5;
+        }
+
+        if (this.stateTimer >= this.stateTimes.BARRAGE_TELEGRAPH) {
+            this.state = 'BARRAGE_ATTACK';
+            this.stateTimer = 0;
+            this.barrageCounter = 0;
+        }
+    }
+
+    updateBarrageAttack(deltaTime, playerPosition) {
+        const progress = this.stateTimer / this.stateTimes.BARRAGE_ATTACK;
+
+        // Fire multiple projectiles in a spread pattern
+        const fireRate = 0.15; // Fire every 0.15 seconds
+        const expectedShots = Math.floor(this.stateTimer / fireRate);
+
+        if (this.barrageCounter < expectedShots && this.barrageCounter < 10) {
+            this.fireBarrageProjectile(playerPosition, this.barrageCounter);
+            this.barrageCounter++;
+        }
+
+        // Arms sweep during barrage
+        this.leftArm.rotation.z = 2.5 - progress * 5;
+        this.rightArm.rotation.z = -2.5 + progress * 5;
+
+        if (this.stateTimer >= this.stateTimes.BARRAGE_ATTACK) {
+            this.state = 'RECOVER';
+            this.stateTimer = 0;
+        }
+    }
+
+    // ─── ELEMENTAL SPECIAL ATTACKS ───────────────────────────────────────────────
+
+    updateSpecialTelegraph(deltaTime) {
+        const progress = this.stateTimer / this.stateTimes.SPECIAL_TELEGRAPH;
+
+        // Dramatic wind-up animation
+        this.leftArm.rotation.z = progress * Math.PI;
+        this.rightArm.rotation.z = -progress * Math.PI;
+
+        // Boss rises slightly
+        this.mesh.position.y = progress * 1.5;
+
+        // Gear rings spin up rapidly
+        if (this.gearRing1) this.gearRing1.rotation.z += deltaTime * (0.5 + progress * 3);
+        if (this.gearRing2) this.gearRing2.rotation.z -= deltaTime * (0.5 + progress * 3);
+
+        // Eye glows intensely
+        if (this.eye) {
+            this.eye.scale.setScalar(1 + progress * 0.5);
+        }
+        if (this.eyeGlow) {
+            this.eyeGlow.material.opacity = 0.5 + progress * 0.5;
+        }
+
+        // Screen warning effect
+        if (progress > 0.8 && this.game && this.game.vfx) {
+            this.game.vfx.screenFlash(this.colors.glow, 0.2);
+        }
+
+        if (this.stateTimer >= this.stateTimes.SPECIAL_TELEGRAPH) {
+            this.state = 'SPECIAL_ATTACK';
+            this.stateTimer = 0;
+            this.initializeSpecialAttack();
+        }
+    }
+
+    initializeSpecialAttack() {
+        // Reset element-specific counters
+        this.tornadoAngle = 0;
+        this.infernoRingCount = 0;
+        this.iceShardCount = 0;
+        this.lightningStrikeCount = 0;
+
+        // Screen effect for special attack start
+        if (this.game && this.game.vfx) {
+            this.game.vfx.screenFlash(this.colors.glow, 0.4);
+        }
+        if (this.game && this.game.screenEffects) {
+            this.game.screenEffects.shake(0.5, 0.5);
+        }
+    }
+
+    updateSpecialAttack(deltaTime, playerPosition) {
+        const progress = this.stateTimer / this.stateTimes.SPECIAL_ATTACK;
+
+        // Keep boss elevated during special
+        this.mesh.position.y = 1.5 - progress * 1.5;
+
+        // Execute element-specific attack
+        switch (this.element) {
+            case 'TORNADO':
+                this.updateTornadoAttack(deltaTime, playerPosition, progress);
+                break;
+            case 'INFERNO':
+                this.updateInfernoAttack(deltaTime, playerPosition, progress);
+                break;
+            case 'FREEZE':
+                this.updateFreezeAttack(deltaTime, playerPosition, progress);
+                break;
+            case 'STORM':
+                this.updateStormAttack(deltaTime, playerPosition, progress);
+                break;
+            case 'DEVOUR':
+                this.updateDevourAttack(deltaTime, playerPosition, progress);
+                break;
+        }
+
+        if (this.stateTimer >= this.stateTimes.SPECIAL_ATTACK) {
+            this.state = 'RECOVER';
+            this.stateTimer = 0;
+            this.mesh.position.y = 0;
+        }
+    }
+
+    // WIND - Tornado: Spiral projectiles that orbit outward
+    updateTornadoAttack(deltaTime, playerPosition, progress) {
+        this.tornadoAngle += deltaTime * 8;
+
+        // Spawn spiral projectiles every 0.1 seconds
+        const spawnRate = 0.1;
+        const expectedSpawns = Math.floor(this.stateTimer / spawnRate);
+
+        if (this.tornadoSpawnCount === undefined) this.tornadoSpawnCount = 0;
+
+        if (this.tornadoSpawnCount < expectedSpawns && this.tornadoSpawnCount < 20) {
+            this.spawnTornadoProjectile(this.tornadoSpawnCount);
+            this.tornadoSpawnCount++;
+        }
+
+        // Spinning animation
+        this.mesh.rotation.y += deltaTime * 5;
+
+        if (progress >= 1) this.tornadoSpawnCount = 0;
+    }
+
+    spawnTornadoProjectile(index) {
+        const angle = this.tornadoAngle + (index * 0.3);
+        const projectileMat = new THREE.MeshBasicMaterial({
+            color: this.colors.glow,
             transparent: true,
-            opacity: 0.3
+            opacity: 0.8
         });
-        const zone = new THREE.Mesh(zoneGeom, zoneMat);
+        const projectile = new THREE.Mesh(this.projectileGeometry, projectileMat);
+        projectile.position.set(this.position.x, 2, this.position.z);
 
-        // Random position in arena
-        const angle = Math.random() * Math.PI * 2;
-        const dist = 10 + Math.random() * 15;
-        zone.position.set(
-            Math.cos(angle) * dist,
-            0.1,
-            Math.sin(angle) * dist
+        projectile.userData = {
+            type: 'tornado',
+            angle: angle,
+            radius: 1,
+            expandSpeed: 6,
+            rotateSpeed: 4,
+            direction: new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)),
+            speed: 0,
+            damage: this.projectileDamage * 0.7,
+            lifetime: 4,
+            age: 0
+        };
+
+        this.scene.add(projectile);
+        this.projectiles.push(projectile);
+    }
+
+    // FIRE - Inferno: Expanding rings of fire
+    updateInfernoAttack(deltaTime, playerPosition, progress) {
+        // Spawn fire rings at intervals
+        const ringInterval = 0.5;
+        const expectedRings = Math.floor(this.stateTimer / ringInterval);
+
+        if (this.infernoRingCount < expectedRings && this.infernoRingCount < 4) {
+            this.spawnInfernoRing(this.infernoRingCount);
+            this.infernoRingCount++;
+
+            // Fire burst VFX
+            if (this.game && this.game.vfx) {
+                this.game.vfx.screenFlash('#ff4500', 0.3);
+            }
+        }
+
+        // Pulsing glow effect
+        if (this.bossLight) {
+            this.bossLight.intensity = 1 + Math.sin(this.stateTimer * 10) * 0.5;
+        }
+    }
+
+    spawnInfernoRing(ringIndex) {
+        const numProjectiles = 8 + ringIndex * 2;
+        for (let i = 0; i < numProjectiles; i++) {
+            const angle = (i / numProjectiles) * Math.PI * 2;
+            const projectileMat = new THREE.MeshBasicMaterial({
+                color: ringIndex % 2 === 0 ? 0xff4500 : 0xff8800,
+                transparent: true,
+                opacity: 0.9
+            });
+            const projectile = new THREE.Mesh(this.projectileGeometry, projectileMat);
+            projectile.position.set(this.position.x, 1.5, this.position.z);
+
+            projectile.userData = {
+                type: 'inferno',
+                direction: new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)),
+                speed: 8 + ringIndex * 2,
+                damage: this.projectileDamage * 0.8,
+                lifetime: 3,
+                age: 0
+            };
+
+            this.scene.add(projectile);
+            this.projectiles.push(projectile);
+        }
+    }
+
+    // ICE - Freeze: Targeted ice shards that slow on hit
+    updateFreezeAttack(deltaTime, playerPosition, progress) {
+        // Spawn ice shards at intervals, aimed at player
+        const shardInterval = 0.25;
+        const expectedShards = Math.floor(this.stateTimer / shardInterval);
+
+        if (this.iceShardCount < expectedShards && this.iceShardCount < 8) {
+            this.spawnIceShard(playerPosition, this.iceShardCount);
+            this.iceShardCount++;
+        }
+
+        // Frost aura visual
+        if (this.bossLight) {
+            this.bossLight.color.setHex(0x88ccff);
+        }
+    }
+
+    spawnIceShard(playerPosition, index) {
+        // Aimed at player with slight spread
+        this._projectileDir.set(
+            playerPosition.x - this.position.x,
+            0,
+            playerPosition.z - this.position.z
+        ).normalize();
+
+        // Add slight random spread
+        const spread = (Math.random() - 0.5) * 0.3;
+        const cos = Math.cos(spread);
+        const sin = Math.sin(spread);
+        const dirX = this._projectileDir.x * cos - this._projectileDir.z * sin;
+        const dirZ = this._projectileDir.x * sin + this._projectileDir.z * cos;
+
+        const projectileMat = new THREE.MeshBasicMaterial({
+            color: 0x88ccff,
+            transparent: true,
+            opacity: 0.9
+        });
+        const projectile = new THREE.Mesh(this.projectileGeometry, projectileMat);
+        projectile.position.set(this.position.x, 2.5, this.position.z);
+
+        projectile.userData = {
+            type: 'ice',
+            direction: new THREE.Vector3(dirX, 0, dirZ),
+            speed: 14,
+            damage: this.projectileDamage * 0.6,
+            lifetime: 4,
+            age: 0,
+            freezing: true,
+            slowAmount: 0.5,
+            slowDuration: 2
+        };
+
+        this.scene.add(projectile);
+        this.projectiles.push(projectile);
+
+        // Ice crystal spawn VFX
+        if (this.game && this.game.vfx) {
+            this.game.vfx.spawnHitSparks(projectile.position, 5, 'blue');
+        }
+    }
+
+    // LIGHTNING - Storm: Random lightning strikes near player
+    updateStormAttack(deltaTime, playerPosition, progress) {
+        // Spawn lightning strikes at intervals
+        const strikeInterval = 0.3;
+        const expectedStrikes = Math.floor(this.stateTimer / strikeInterval);
+
+        if (this.lightningStrikeCount < expectedStrikes && this.lightningStrikeCount < 6) {
+            this.spawnLightningStrike(playerPosition, this.lightningStrikeCount);
+            this.lightningStrikeCount++;
+        }
+
+        // Flickering light effect
+        if (this.bossLight) {
+            this.bossLight.intensity = Math.random() > 0.5 ? 2 : 0.5;
+        }
+    }
+
+    spawnLightningStrike(playerPosition, index) {
+        // Strike position near player with randomness
+        const strikePos = new THREE.Vector3(
+            playerPosition.x + (Math.random() - 0.5) * 8,
+            0,
+            playerPosition.z + (Math.random() - 0.5) * 8
         );
 
-        this.scene.add(zone);
-        this.distortionZones.push({
-            mesh: zone,
-            timer: 0,
-            duration: 8 + Math.random() * 4
+        // Create lightning bolt visual
+        const boltGroup = new THREE.Group();
+
+        // Main bolt
+        const points = [];
+        const segments = 6;
+        for (let i = 0; i <= segments; i++) {
+            const y = 12 - (i / segments) * 12;
+            const x = (Math.random() - 0.5) * 1.5;
+            const z = (Math.random() - 0.5) * 1.5;
+            points.push(new THREE.Vector3(x, y, z));
+        }
+
+        const boltGeom = new THREE.BufferGeometry().setFromPoints(points);
+        const boltMat = new THREE.LineBasicMaterial({ color: 0xffff00, linewidth: 2 });
+        const bolt = new THREE.Line(boltGeom, boltMat);
+        boltGroup.add(bolt);
+
+        // Impact flash
+        const flashGeom = new THREE.CircleGeometry(2, 12);
+        const flashMat = new THREE.MeshBasicMaterial({
+            color: 0xffff88,
+            transparent: true,
+            opacity: 0.8
         });
-    }
+        const flash = new THREE.Mesh(flashGeom, flashMat);
+        flash.rotation.x = -Math.PI / 2;
+        flash.position.y = 0.1;
+        boltGroup.add(flash);
 
-    updateDistortionZones(deltaTime) {
-        for (let i = this.distortionZones.length - 1; i >= 0; i--) {
-            const zone = this.distortionZones[i];
-            zone.timer += deltaTime;
+        boltGroup.position.copy(strikePos);
+        this.scene.add(boltGroup);
 
-            // Pulse effect
-            zone.mesh.material.opacity = 0.3 + Math.sin(zone.timer * 3) * 0.1;
-
-            if (zone.timer >= zone.duration) {
-                this.scene.remove(zone.mesh);
-                this.distortionZones.splice(i, 1);
-
-                // Create new zone in Phase 2+
-                if (this.phase >= 2 && this.isAlive) {
-                    this.createDistortionZone();
-                }
+        // Check if player is hit by lightning
+        if (this.game && this.game.player) {
+            const dist = strikePos.distanceTo(this.game.player.position);
+            if (dist < 2.5) {
+                this.game.onPlayerHit(this.projectileDamage * 1.2, this);
             }
         }
 
-        // Update shockwaves
-        if (this.shockwaves) {
-            for (let i = this.shockwaves.length - 1; i >= 0; i--) {
-                const sw = this.shockwaves[i];
-                sw.timer += deltaTime;
-                const progress = sw.timer / 0.5;
+        // Screen flash
+        if (this.game && this.game.vfx) {
+            this.game.vfx.screenFlash('#ffff88', 0.3);
+        }
 
-                sw.mesh.scale.setScalar(1 + progress * 10);
-                sw.mesh.material.opacity = 0.8 * (1 - progress);
+        // Remove after short time
+        setTimeout(() => {
+            this.scene.remove(boltGroup);
+            bolt.geometry.dispose();
+            bolt.material.dispose();
+            flash.geometry.dispose();
+            flash.material.dispose();
+        }, 150);
+    }
 
-                if (progress >= 1) {
-                    this.scene.remove(sw.mesh);
-                    this.shockwaves.splice(i, 1);
+    // VOID - Devour: Pull player toward boss + void zones
+    updateDevourAttack(deltaTime, playerPosition, progress) {
+        // Pull player toward boss
+        if (this.game && this.game.player) {
+            const pullStrength = 8 * (1 - progress); // Weakens over time
+            const towardsBoss = new THREE.Vector3(
+                this.position.x - playerPosition.x,
+                0,
+                this.position.z - playerPosition.z
+            );
+            const dist = towardsBoss.length();
+
+            if (dist > 3) {
+                towardsBoss.normalize().multiplyScalar(pullStrength);
+                this.game.player.externalForce.copy(towardsBoss);
+            }
+        }
+
+        // Spawn void zones at start
+        if (progress < 0.1 && !this.voidZonesSpawned) {
+            this.spawnVoidZones();
+            this.voidZonesSpawned = true;
+        }
+
+        // Reset flag when attack ends
+        if (progress >= 1) {
+            this.voidZonesSpawned = false;
+            if (this.game && this.game.player) {
+                this.game.player.externalForce.set(0, 0, 0);
+            }
+        }
+
+        // Chromatic effect
+        if (this.game && this.game.screenEffects && progress < 0.5) {
+            this.game.screenEffects.chromaticBurst(0.3);
+        }
+    }
+
+    spawnVoidZones() {
+        // Create damaging void zones around boss
+        for (let i = 0; i < 4; i++) {
+            const angle = (i / 4) * Math.PI * 2;
+            const distance = 6;
+            const zonePos = new THREE.Vector3(
+                this.position.x + Math.cos(angle) * distance,
+                0.1,
+                this.position.z + Math.sin(angle) * distance
+            );
+
+            const zoneGeom = new THREE.CircleGeometry(2.5, 16);
+            const zoneMat = new THREE.MeshBasicMaterial({
+                color: 0x8800ff,
+                transparent: true,
+                opacity: 0.5
+            });
+            const zone = new THREE.Mesh(zoneGeom, zoneMat);
+            zone.rotation.x = -Math.PI / 2;
+            zone.position.copy(zonePos);
+            this.scene.add(zone);
+
+            // Damage player if in zone
+            const damageInterval = setInterval(() => {
+                if (!this.isAlive || !this.game || !this.game.player) {
+                    clearInterval(damageInterval);
+                    return;
+                }
+                const dist = zonePos.distanceTo(this.game.player.position);
+                if (dist < 2.5) {
+                    this.game.onPlayerHit(this.projectileDamage * 0.3, this);
+                }
+            }, 500);
+
+            // Remove after duration
+            setTimeout(() => {
+                clearInterval(damageInterval);
+                this.scene.remove(zone);
+                zone.geometry.dispose();
+                zone.material.dispose();
+            }, 4000);
+        }
+    }
+
+    fireProjectile(playerPosition) {
+        // Calculate direction to player
+        this._projectileDir.set(
+            playerPosition.x - this.position.x,
+            0,
+            playerPosition.z - this.position.z
+        ).normalize();
+
+        // Create projectile mesh
+        const projectileMat = new THREE.MeshBasicMaterial({
+            color: this.colors.glow,
+            transparent: true,
+            opacity: 0.9
+        });
+        const projectile = new THREE.Mesh(this.projectileGeometry, projectileMat);
+        projectile.position.set(this.position.x, 2.5, this.position.z);
+
+        // Store projectile data
+        projectile.userData = {
+            direction: this._projectileDir.clone(),
+            speed: this.projectileSpeed,
+            damage: this.projectileDamage,
+            lifetime: 5,
+            age: 0
+        };
+
+        this.scene.add(projectile);
+        this.projectiles.push(projectile);
+
+        // Sound/VFX feedback
+        if (this.game && this.game.vfx) {
+            this.game.vfx.spawnHitSparks(projectile.position, 5, 'gold');
+        }
+    }
+
+    fireBarrageProjectile(playerPosition, index) {
+        // Calculate base direction to player
+        this._projectileDir.set(
+            playerPosition.x - this.position.x,
+            0,
+            playerPosition.z - this.position.z
+        ).normalize();
+
+        // Add spread based on index
+        const spreadAngle = (index - 5) * 0.15; // Spread from -0.75 to +0.75 radians
+        const cos = Math.cos(spreadAngle);
+        const sin = Math.sin(spreadAngle);
+        const newX = this._projectileDir.x * cos - this._projectileDir.z * sin;
+        const newZ = this._projectileDir.x * sin + this._projectileDir.z * cos;
+
+        // Create projectile
+        const projectileMat = new THREE.MeshBasicMaterial({
+            color: this.colors.secondary,
+            transparent: true,
+            opacity: 0.8
+        });
+        const projectile = new THREE.Mesh(this.projectileGeometry, projectileMat);
+        projectile.position.set(this.position.x, 2.5, this.position.z);
+
+        projectile.userData = {
+            direction: new THREE.Vector3(newX, 0, newZ),
+            speed: this.projectileSpeed * 0.8, // Slightly slower
+            damage: this.projectileDamage * 0.6, // Less damage per shot
+            lifetime: 4,
+            age: 0
+        };
+
+        this.scene.add(projectile);
+        this.projectiles.push(projectile);
+    }
+
+    updateProjectiles(deltaTime, playerPosition) {
+        for (let i = this.projectiles.length - 1; i >= 0; i--) {
+            const proj = this.projectiles[i];
+            proj.userData.age += deltaTime;
+
+            // Remove old projectiles
+            if (proj.userData.age > proj.userData.lifetime) {
+                this.scene.remove(proj);
+                proj.material.dispose();
+                this.projectiles.splice(i, 1);
+                continue;
+            }
+
+            // Movement based on projectile type
+            if (proj.userData.type === 'tornado') {
+                // Tornado projectiles spiral outward from boss
+                proj.userData.angle += proj.userData.rotateSpeed * deltaTime;
+                proj.userData.radius += proj.userData.expandSpeed * deltaTime;
+                proj.position.x = this.position.x + Math.cos(proj.userData.angle) * proj.userData.radius;
+                proj.position.z = this.position.z + Math.sin(proj.userData.angle) * proj.userData.radius;
+            } else {
+                // Normal linear movement
+                const moveSpeed = proj.userData.speed * deltaTime;
+                proj.position.x += proj.userData.direction.x * moveSpeed;
+                proj.position.z += proj.userData.direction.z * moveSpeed;
+            }
+
+            // Rotate for visual effect
+            proj.rotation.x += deltaTime * 5;
+            proj.rotation.y += deltaTime * 5;
+
+            // Check collision with player
+            if (this.game && this.game.player) {
+                const dist = proj.position.distanceTo(this.game.player.position);
+                if (dist < 1.2) {
+                    // Hit player
+                    this.game.onPlayerHit(proj.userData.damage, this);
+
+                    // Ice projectiles apply slow effect
+                    if (proj.userData.freezing && this.game.player.applySlowEffect) {
+                        this.game.player.applySlowEffect(
+                            proj.userData.slowAmount,
+                            proj.userData.slowDuration
+                        );
+                    }
+
+                    // Remove projectile
+                    this.scene.remove(proj);
+                    proj.material.dispose();
+                    this.projectiles.splice(i, 1);
+
+                    // Impact VFX - color based on type
+                    if (this.game.vfx) {
+                        const vfxColor = proj.userData.type === 'ice' ? 'blue' :
+                                        proj.userData.type === 'inferno' ? 'red' : 'gold';
+                        this.game.vfx.spawnHitSparks(proj.position, 10, vfxColor);
+                    }
                 }
             }
+        }
+    }
+
+    // ─── MINION SPAWNING ─────────────────────────────────────────────────────────
+
+    updateMinionSpawning(deltaTime) {
+        if (!this.game || this.state === 'SPAWN') return;
+
+        this.minionSpawnCooldown -= deltaTime;
+
+        if (this.minionSpawnCooldown <= 0) {
+            this.spawnMinions();
+            this.minionSpawnCooldown = this.minionSpawnInterval;
+        }
+    }
+
+    spawnMinions() {
+        if (!this.game) return;
+
+        // Check current minion count
+        const currentMinions = this.game.enemies.filter(e => e.isAlive && !e.isBoss).length;
+        const availableSlots = Math.max(0, this.maxMinions - currentMinions);
+
+        if (availableSlots === 0) return;
+
+        // Get minion types from boss type config
+        const minionTypes = this.bossType ? this.bossType.minions : ['tick', 'tock'];
+        const spawnCount = Math.min(2, availableSlots);
+
+        for (let i = 0; i < spawnCount; i++) {
+            const minionType = minionTypes[Math.floor(Math.random() * minionTypes.length)];
+            const angle = Math.random() * Math.PI * 2;
+            const distance = 6 + Math.random() * 4;
+            const spawnPos = new THREE.Vector3(
+                this.position.x + Math.cos(angle) * distance,
+                0,
+                this.position.z + Math.sin(angle) * distance
+            );
+
+            // Delayed spawn for dramatic effect
+            setTimeout(() => {
+                if (this.isAlive && this.game) {
+                    const currentCount = this.game.enemies.filter(e => e.isAlive && !e.isBoss).length;
+                    if (currentCount < this.maxMinions) {
+                        this.game.spawnEnemy(minionType, spawnPos);
+
+                        // Spawn VFX
+                        if (this.game.vfx) {
+                            this.game.vfx.spawnHitSparks(spawnPos, 15, 'gold');
+                        }
+                    }
+                }
+            }, i * 500);
         }
     }
 
     updateDeath(deltaTime) {
         this.deathTimer += deltaTime;
-        const progress = this.deathTimer / 3.0; // Long death animation
-
-        // Hide health bar on death
+        const progress = this.deathTimer / 1.5;
         this.hideHealthBar();
 
         if (progress < 1) {
-            // Dramatic death - explode outward
-            const shake = Math.sin(progress * 50) * (1 - progress) * 0.3;
-            this.mesh.position.x = this.position.x + shake;
-            this.mesh.position.z = this.position.z + shake;
-
-            this.mesh.rotation.y += deltaTime * progress * 10;
-            this.mesh.scale.setScalar(1 + progress * 0.5);
-
-            this.bossLight.intensity = 3 * (1 - progress);
-
-            // Shrink at the end
-            if (progress > 0.7) {
-                this.mesh.scale.setScalar((1 - progress) * 3);
-            }
-        } else {
-            // Clean up
-            for (const zone of this.distortionZones) {
-                this.scene.remove(zone.mesh);
-            }
-            this.distortionZones = [];
-
-            if (this.shockwaves) {
-                for (const sw of this.shockwaves) {
-                    this.scene.remove(sw.mesh);
+            this.mesh.rotation.x = progress * 0.5;
+            this.mesh.position.y = -progress * 2;
+            this.mesh.traverse((child) => {
+                if (child.isMesh && child.material) {
+                    child.material.transparent = true;
+                    child.material.opacity = 1 - progress;
                 }
-                this.shockwaves = [];
-            }
-
+            });
+        } else {
             this.isDying = false;
             this.destroy();
         }
     }
 
+    checkAttackHit(playerPosition, playerRadius = 0.5) {
+        if (this.hasHitPlayer) return false;
+
+        if (this.state === 'SWEEP_ATTACK' || this.state === 'SLAM_ATTACK') {
+            const dist = Vec3.distance(this.position, playerPosition);
+            if (dist < 5) {
+                this.hasHitPlayer = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
     applyFlash() {
-        if (this.mesh) this.mesh.scale.setScalar(1.1);
+        if (this.mesh) this.mesh.scale.setScalar(1.15);
     }
 
     restoreMaterials() {
         if (this.mesh) this.mesh.scale.setScalar(1.0);
     }
 
-    checkAttackHit(playerPosition, playerRadius = 0.5) {
-        if (this.hasHitPlayer) return false;
-
-        // Sweep attack - wide arc
-        if (this.state === 'SWEEP') {
-            const dist = Vec3.distance(this.position, playerPosition);
-            if (dist < 6) { // Wide sweep range
-                this.hasHitPlayer = true;
-                this.damage = 25 * this.phase;
-                return true;
-            }
-        }
-
-        // Pound attack - AoE around boss
-        if (this.state === 'POUND' && this.stateTimer > this.stateTimes.POUND * 0.8) {
-            const dist = Vec3.distance(this.position, playerPosition);
-            if (dist < 8) { // Shockwave range
-                this.hasHitPlayer = true;
-                this.damage = 35 * this.phase;
-                return true;
-            }
-        }
-
-        // Distortion zone damage (slow tick)
-        for (const zone of this.distortionZones) {
-            const dist = Vec3.distance(zone.mesh.position, playerPosition);
-            if (dist < 4) {
-                // Small damage tick (handled per frame, so very low)
-                this.damage = 5;
-                return true;
-            }
-        }
-
-        // V3: Barrage projectile collision
-        for (let i = this.barrageProjectiles.length - 1; i >= 0; i--) {
-            const proj = this.barrageProjectiles[i];
-            const dx = proj.mesh.position.x - playerPosition.x;
-            const dz = proj.mesh.position.z - playerPosition.z;
-            const dist = Math.sqrt(dx * dx + dz * dz);
-
-            if (dist < playerRadius + 0.5) {
-                // Remove projectile on hit
-                this.scene.remove(proj.mesh);
-                proj.mesh.geometry.dispose();
-                proj.mesh.material.dispose();
-                this.barrageProjectiles.splice(i, 1);
-
-                this.damage = 20; // Barrage projectile damage
-                return true;
-            }
-        }
-
-        return false;
+    isVulnerable() {
+        return this.state === 'RECOVER';
     }
 
-    isVulnerable() {
-        return this.state === 'RECOVER' || this.state === 'TRANSITION';
+    die() {
+        // Clean up all projectiles
+        for (const proj of this.projectiles) {
+            this.scene.remove(proj);
+            proj.material.dispose();
+        }
+        this.projectiles = [];
+
+        // Dispose shared geometry
+        if (this.projectileGeometry) {
+            this.projectileGeometry.dispose();
+        }
+
+        // Dramatic death VFX
+        if (this.game && this.game.vfx) {
+            this.game.vfx.spawnHitSparks(this.position, 50, 'gold', {
+                speed: 15,
+                gravity: 3,
+                lifetime: 2.0
+            });
+            this.game.vfx.screenFlash(this.colors.glow, 0.8);
+        }
+
+        if (this.game && this.game.screenEffects) {
+            this.game.screenEffects.shake(0.8, 1.0);
+            this.game.screenEffects.slowmo(0.3, 1.5);
+        }
+
+        super.die();
     }
 }
 
-// ─── ELEMENTAL CHRONOPHAGE BOSS CONFIGURATIONS ─────────────────────────────────
+// Boss type configurations for different waves
 const CHRONOPHAGE_TYPES = {
     WIND: {
         name: 'Wind Chronophage',
@@ -11982,591 +12803,6 @@ function getChronophageType(wave) {
         case 3: return CHRONOPHAGE_TYPES.ICE;
         case 4: return CHRONOPHAGE_TYPES.LIGHTNING;
         default: return CHRONOPHAGE_TYPES.TIME_EATER; // Wave 50+ is always Time Eater
-    }
-}
-
-// ─── ELEMENTAL CHRONOPHAGE CLASS ───────────────────────────────────────────────
-class ElementalChronophage extends ChronophagePrime {
-    constructor(scene, position, game, chronophageType) {
-        super(scene, position, game);
-
-        this.chronophageType = chronophageType;
-        this.enemyName = chronophageType.name;
-
-        // Scale stats based on boss tier
-        const bossNumber = Math.floor(game.wave / 10);
-        const statMultiplier = 1 + (bossNumber - 1) * 0.5;
-
-        this.health *= statMultiplier;
-        this.maxHealth = this.health;
-        this.damage *= statMultiplier;
-
-        // Special attack tracking
-        this.specialAttackCooldown = 0;
-        this.specialAttackInterval = 8; // Seconds between special attacks
-        this.isPerformingSpecialAttack = false;
-
-        // Boss-specific projectiles/effects
-        this.elementalProjectiles = [];
-        this.elementalEffects = [];
-
-        // Update visuals with elemental colors
-        this.applyElementalColors();
-
-        // Add elemental particles
-        this.createElementalAura();
-    }
-
-    applyElementalColors() {
-        const colors = this.chronophageType.colors;
-
-        // Update body materials
-        this.mesh.traverse((child) => {
-            if (child.isMesh && child.material) {
-                if (child === this.body) {
-                    child.material.color.setHex(colors.primary);
-                } else if (child === this.eye) {
-                    child.material.color.setHex(colors.eye);
-                    child.material.emissive = new THREE.Color(colors.eye);
-                    child.material.emissiveIntensity = 1.0;
-                } else if (child.material.color && child.material.emissive) {
-                    // Gold parts become elemental color
-                    if (child.material.color.getHex() === 0xd4af37) {
-                        child.material.color.setHex(colors.secondary);
-                        child.material.emissive.setHex(colors.secondary);
-                    }
-                }
-            }
-        });
-
-        // Update boss light
-        if (this.bossLight) {
-            this.bossLight.color.setHex(colors.glow);
-        }
-    }
-
-    createElementalAura() {
-        // Create floating elemental particles around boss
-        this.auraParticles = [];
-        const colors = this.chronophageType.colors;
-
-        for (let i = 0; i < 12; i++) {
-            const particleGeom = new THREE.SphereGeometry(0.15, 8, 8);
-            const particleMat = new THREE.MeshBasicMaterial({
-                color: colors.glow,
-                transparent: true,
-                opacity: 0.7
-            });
-            const particle = new THREE.Mesh(particleGeom, particleMat);
-            particle.userData.angle = (i / 12) * Math.PI * 2;
-            particle.userData.radius = 3 + Math.random();
-            particle.userData.speed = 0.5 + Math.random() * 0.5;
-            particle.userData.yOffset = (Math.random() - 0.5) * 2;
-            this.mesh.add(particle);
-            this.auraParticles.push(particle);
-        }
-    }
-
-    update(deltaTime, playerPosition) {
-        super.update(deltaTime, playerPosition);
-
-        if (!this.isAlive) return;
-
-        // Update aura particles
-        if (this.auraParticles) {
-            for (const particle of this.auraParticles) {
-                particle.userData.angle += particle.userData.speed * deltaTime;
-                particle.position.x = Math.cos(particle.userData.angle) * particle.userData.radius;
-                particle.position.z = Math.sin(particle.userData.angle) * particle.userData.radius;
-                particle.position.y = 2.5 + particle.userData.yOffset + Math.sin(particle.userData.angle * 2) * 0.3;
-            }
-        }
-
-        // Special attack cooldown
-        this.specialAttackCooldown -= deltaTime;
-        if (this.specialAttackCooldown <= 0 && !this.isPerformingSpecialAttack && this.state === 'IDLE') {
-            this.startSpecialAttack();
-        }
-
-        // Update elemental projectiles
-        this.updateElementalProjectiles(deltaTime, playerPosition);
-    }
-
-    startSpecialAttack() {
-        this.isPerformingSpecialAttack = true;
-        this.specialAttackCooldown = this.specialAttackInterval;
-
-        const attackType = this.chronophageType.specialAttack;
-
-        switch (attackType) {
-            case 'TORNADO':
-                this.performTornadoAttack();
-                break;
-            case 'INFERNO':
-                this.performInfernoAttack();
-                break;
-            case 'FREEZE':
-                this.performFreezeAttack();
-                break;
-            case 'STORM':
-                this.performStormAttack();
-                break;
-            case 'DEVOUR':
-                this.performDevourAttack();
-                break;
-        }
-
-        // Spawn minions during special attack
-        this.spawnElementalMinions();
-
-        setTimeout(() => {
-            this.isPerformingSpecialAttack = false;
-        }, 2000);
-    }
-
-    performTornadoAttack() {
-        // Wind Chronophage: Create swirling projectiles
-        const numProjectiles = 8;
-        for (let i = 0; i < numProjectiles; i++) {
-            const angle = (i / numProjectiles) * Math.PI * 2;
-            const projectile = this.createElementalProjectile(
-                0x44ff88,
-                new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle))
-            );
-            projectile.userData.spiral = true;
-            projectile.userData.baseAngle = angle;
-            this.elementalProjectiles.push(projectile);
-        }
-
-        // VFX
-        if (this.game.vfx) {
-            this.game.vfx.screenFlash('#44ff88', 0.3);
-        }
-    }
-
-    performInfernoAttack() {
-        // Fire Chronophage: Ring of fire expanding outward
-        const numFlames = 16;
-        for (let i = 0; i < numFlames; i++) {
-            const angle = (i / numFlames) * Math.PI * 2;
-            const projectile = this.createElementalProjectile(
-                0xff4500,
-                new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle))
-            );
-            projectile.userData.expanding = true;
-            this.elementalProjectiles.push(projectile);
-        }
-
-        if (this.game.vfx) {
-            this.game.vfx.screenFlash('#ff4500', 0.4);
-        }
-    }
-
-    performFreezeAttack() {
-        // Ice Chronophage: Create ice shards that slow player
-        const numShards = 12;
-        for (let i = 0; i < numShards; i++) {
-            const angle = (i / numShards) * Math.PI * 2;
-            const delay = i * 100;
-            setTimeout(() => {
-                if (!this.isAlive) return;
-                const projectile = this.createElementalProjectile(
-                    0x88ccff,
-                    new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle))
-                );
-                projectile.userData.freezing = true;
-                this.elementalProjectiles.push(projectile);
-            }, delay);
-        }
-
-        if (this.game.vfx) {
-            this.game.vfx.screenFlash('#88ccff', 0.4);
-        }
-    }
-
-    performStormAttack() {
-        // Lightning Chronophage: Random lightning strikes
-        const numStrikes = 6;
-        for (let i = 0; i < numStrikes; i++) {
-            setTimeout(() => {
-                if (!this.isAlive || !this.game.player) return;
-
-                // Strike near player position with some randomness
-                const strikePos = this.game.player.position.clone();
-                strikePos.x += (Math.random() - 0.5) * 8;
-                strikePos.z += (Math.random() - 0.5) * 8;
-
-                this.createLightningStrike(strikePos);
-            }, i * 300);
-        }
-
-        if (this.game.vfx) {
-            this.game.vfx.screenFlash('#ffff88', 0.5);
-        }
-    }
-
-    performDevourAttack() {
-        // Time Eater: Pulls player toward boss and spawns void zones
-        if (this.game.player) {
-            // Store reference to boss for dynamic pull direction
-            const boss = this;
-
-            // Apply pull force using player's external force system
-            // This integrates properly with the movement system
-            const pullStrength = 15;
-            const pullDuration = 2000;
-            const pullInterval = 100;
-            let elapsed = 0;
-
-            const pullTimer = setInterval(() => {
-                if (!boss.isAlive || !this.game.player) {
-                    clearInterval(pullTimer);
-                    return;
-                }
-
-                // Calculate fresh pull direction each tick (dynamic)
-                const towardsBoss = new THREE.Vector3(
-                    boss.position.x - this.game.player.position.x,
-                    0,
-                    boss.position.z - this.game.player.position.z
-                );
-
-                const distance = towardsBoss.length();
-                if (distance > 2) { // Don't pull if too close
-                    towardsBoss.normalize().multiplyScalar(pullStrength);
-                    this.game.player.externalForce.copy(towardsBoss);
-                }
-
-                elapsed += pullInterval;
-                if (elapsed >= pullDuration) {
-                    clearInterval(pullTimer);
-                    // Clear remaining force
-                    if (this.game.player) {
-                        this.game.player.externalForce.set(0, 0, 0);
-                    }
-                }
-            }, pullInterval);
-
-            // Spawn void zones
-            for (let i = 0; i < 4; i++) {
-                const angle = (i / 4) * Math.PI * 2;
-                const distance = 8;
-                const voidPos = new THREE.Vector3(
-                    this.position.x + Math.cos(angle) * distance,
-                    0,
-                    this.position.z + Math.sin(angle) * distance
-                );
-                this.createVoidZone(voidPos);
-            }
-        }
-
-        if (this.game.vfx) {
-            this.game.vfx.screenFlash('#ff00ff', 0.6);
-            this.game.screenEffects.chromaticBurst(0.5);
-        }
-    }
-
-    createElementalProjectile(color, direction) {
-        const geom = new THREE.SphereGeometry(0.4, 8, 8);
-        const mat = new THREE.MeshBasicMaterial({
-            color: color,
-            transparent: true,
-            opacity: 0.9
-        });
-        const projectile = new THREE.Mesh(geom, mat);
-        projectile.position.copy(this.position);
-        projectile.position.y = 2;
-        projectile.userData.direction = direction.clone();
-        projectile.userData.speed = 12;
-        projectile.userData.lifetime = 5;
-        projectile.userData.age = 0;
-        projectile.userData.damage = this.damage * 0.5;
-
-        // Add glow
-        const light = new THREE.PointLight(color, 0.5, 3);
-        projectile.add(light);
-
-        this.scene.add(projectile);
-        return projectile;
-    }
-
-    createLightningStrike(position) {
-        // Create visual lightning bolt
-        const boltGroup = new THREE.Group();
-
-        // Main bolt
-        const points = [];
-        const segments = 8;
-        for (let i = 0; i <= segments; i++) {
-            const y = 15 - (i / segments) * 15;
-            const x = (Math.random() - 0.5) * 1;
-            const z = (Math.random() - 0.5) * 1;
-            points.push(new THREE.Vector3(x, y, z));
-        }
-
-        const boltGeom = new THREE.BufferGeometry().setFromPoints(points);
-        const boltMat = new THREE.LineBasicMaterial({ color: 0xffff00, linewidth: 3 });
-        const bolt = new THREE.Line(boltGeom, boltMat);
-        boltGroup.add(bolt);
-
-        // Impact flash
-        const flashGeom = new THREE.CircleGeometry(2, 16);
-        const flashMat = new THREE.MeshBasicMaterial({
-            color: 0xffff88,
-            transparent: true,
-            opacity: 0.8
-        });
-        const flash = new THREE.Mesh(flashGeom, flashMat);
-        flash.rotation.x = -Math.PI / 2;
-        flash.position.y = 0.1;
-        boltGroup.add(flash);
-
-        boltGroup.position.copy(position);
-        this.scene.add(boltGroup);
-
-        // Check if player is hit
-        if (this.game.player) {
-            const dist = position.distanceTo(this.game.player.position);
-            if (dist < 3) {
-                this.game.onPlayerHit(this.damage * 0.3, this);
-            }
-        }
-
-        // Remove after short time
-        setTimeout(() => {
-            this.scene.remove(boltGroup);
-            boltGroup.traverse((child) => {
-                if (child.geometry) child.geometry.dispose();
-                if (child.material) child.material.dispose();
-            });
-        }, 200);
-    }
-
-    createVoidZone(position) {
-        const zoneGeom = new THREE.CircleGeometry(3, 32);
-        const zoneMat = new THREE.MeshBasicMaterial({
-            color: 0x8800ff,
-            transparent: true,
-            opacity: 0.5
-        });
-        const zone = new THREE.Mesh(zoneGeom, zoneMat);
-        zone.rotation.x = -Math.PI / 2;
-        zone.position.copy(position);
-        zone.position.y = 0.1;
-        this.scene.add(zone);
-
-        // Damage player if in zone
-        const damageInterval = setInterval(() => {
-            if (!this.isAlive || !this.game.player) {
-                clearInterval(damageInterval);
-                return;
-            }
-            const dist = position.distanceTo(this.game.player.position);
-            if (dist < 3) {
-                this.game.onPlayerHit(this.damage * 0.1, this);
-            }
-        }, 500);
-
-        // Remove after duration
-        setTimeout(() => {
-            clearInterval(damageInterval);
-            this.scene.remove(zone);
-            zone.geometry.dispose();
-            zone.material.dispose();
-        }, 5000);
-    }
-
-    updateElementalProjectiles(deltaTime, playerPosition) {
-        for (let i = this.elementalProjectiles.length - 1; i >= 0; i--) {
-            const proj = this.elementalProjectiles[i];
-            proj.userData.age += deltaTime;
-
-            if (proj.userData.age > proj.userData.lifetime) {
-                this.scene.remove(proj);
-                proj.geometry.dispose();
-                proj.material.dispose();
-                this.elementalProjectiles.splice(i, 1);
-                continue;
-            }
-
-            // Movement patterns
-            if (proj.userData.spiral) {
-                proj.userData.baseAngle += deltaTime * 2;
-                const radius = 3 + proj.userData.age * 3;
-                proj.position.x = this.position.x + Math.cos(proj.userData.baseAngle) * radius;
-                proj.position.z = this.position.z + Math.sin(proj.userData.baseAngle) * radius;
-            } else if (proj.userData.expanding) {
-                const expandSpeed = proj.userData.speed;
-                proj.position.add(proj.userData.direction.clone().multiplyScalar(expandSpeed * deltaTime));
-            } else {
-                proj.position.add(proj.userData.direction.clone().multiplyScalar(proj.userData.speed * deltaTime));
-            }
-
-            // Check player collision
-            if (this.game.player) {
-                const dist = proj.position.distanceTo(this.game.player.position);
-                if (dist < 1.5) {
-                    this.game.onPlayerHit(proj.userData.damage, this);
-
-                    // Freezing projectiles slow player
-                    if (proj.userData.freezing && this.game.player) {
-                        this.game.player.applySlowEffect(0.5, 2);
-                    }
-
-                    this.scene.remove(proj);
-                    proj.geometry.dispose();
-                    proj.material.dispose();
-                    this.elementalProjectiles.splice(i, 1);
-                }
-            }
-        }
-    }
-
-    spawnElementalMinions() {
-        if (!this.game) return;
-
-        const minionTypes = this.chronophageType.minions;
-        const numMinions = 2 + Math.floor(this.game.wave / 20);
-
-        for (let i = 0; i < numMinions; i++) {
-            const minionType = minionTypes[Math.floor(Math.random() * minionTypes.length)];
-            const angle = Math.random() * Math.PI * 2;
-            const distance = 8 + Math.random() * 5;
-            const pos = new THREE.Vector3(
-                this.position.x + Math.cos(angle) * distance,
-                0,
-                this.position.z + Math.sin(angle) * distance
-            );
-
-            setTimeout(() => {
-                if (this.isAlive && this.game) {
-                    this.game.spawnEnemy(minionType, pos);
-                }
-            }, i * 300);
-        }
-    }
-
-    die() {
-        // Clean up elemental projectiles
-        for (const proj of this.elementalProjectiles) {
-            this.scene.remove(proj);
-            proj.geometry.dispose();
-            proj.material.dispose();
-        }
-        this.elementalProjectiles = [];
-
-        // Clean up aura particles
-        if (this.auraParticles) {
-            for (const particle of this.auraParticles) {
-                this.mesh.remove(particle);
-                particle.geometry.dispose();
-                particle.material.dispose();
-            }
-        }
-
-        // Dramatic death effects
-        this.performDramaticDeath();
-
-        super.die();
-    }
-
-    performDramaticDeath() {
-        if (!this.game || !this.game.vfx) return;
-
-        const colors = this.chronophageType.colors;
-
-        // Multiple lightning strikes at boss position
-        for (let i = 0; i < 8; i++) {
-            setTimeout(() => {
-                if (this.game && this.game.vfx) {
-                    const strikePos = this.position.clone();
-                    strikePos.x += (Math.random() - 0.5) * 4;
-                    strikePos.z += (Math.random() - 0.5) * 4;
-                    this.createDeathLightning(strikePos);
-                }
-            }, i * 150);
-        }
-
-        // Screen effects
-        this.game.screenEffects.chromaticBurst(0.8);
-        this.game.screenEffects.shake(1.0, 1.5);
-        this.game.screenEffects.slowmo(0.2, 2.0);
-        this.game.vfx.screenFlash(colors.glow, 1.0);
-
-        // Massive particle explosion
-        this.game.vfx.spawnHitSparks(this.position, 100, 'gold', {
-            speed: 20,
-            gravity: 5,
-            lifetime: 2.0
-        });
-
-        // Final boss specific effects
-        if (this.chronophageType.isFinalBoss) {
-            // Victory sequence
-            setTimeout(() => {
-                if (this.game) {
-                    this.game.showVictoryScreen();
-                }
-            }, 3000);
-        }
-    }
-
-    createDeathLightning(position) {
-        const colors = this.chronophageType.colors;
-
-        // Create dramatic lightning bolt
-        const boltGroup = new THREE.Group();
-
-        // Multiple branching bolts
-        for (let b = 0; b < 3; b++) {
-            const points = [];
-            const segments = 12;
-            let x = 0, z = 0;
-            for (let i = 0; i <= segments; i++) {
-                const y = 20 - (i / segments) * 20;
-                x += (Math.random() - 0.5) * 2;
-                z += (Math.random() - 0.5) * 2;
-                points.push(new THREE.Vector3(x, y, z));
-            }
-
-            const boltGeom = new THREE.BufferGeometry().setFromPoints(points);
-            const boltMat = new THREE.LineBasicMaterial({
-                color: colors.glow,
-                linewidth: 2
-            });
-            const bolt = new THREE.Line(boltGeom, boltMat);
-            boltGroup.add(bolt);
-        }
-
-        // Large impact effect
-        const impactGeom = new THREE.SphereGeometry(2, 16, 16);
-        const impactMat = new THREE.MeshBasicMaterial({
-            color: colors.glow,
-            transparent: true,
-            opacity: 0.8
-        });
-        const impact = new THREE.Mesh(impactGeom, impactMat);
-        impact.position.y = 1;
-        boltGroup.add(impact);
-
-        boltGroup.position.copy(position);
-        this.scene.add(boltGroup);
-
-        // Animate and remove
-        let scale = 1;
-        const animInterval = setInterval(() => {
-            scale += 0.3;
-            impact.scale.set(scale, scale, scale);
-            impact.material.opacity -= 0.1;
-            if (impact.material.opacity <= 0) {
-                clearInterval(animInterval);
-                this.scene.remove(boltGroup);
-                boltGroup.traverse((child) => {
-                    if (child.geometry) child.geometry.dispose();
-                    if (child.material) child.material.dispose();
-                });
-            }
-        }, 50);
     }
 }
 
@@ -12962,10 +13198,11 @@ class Player {
             const proj = this.projectiles[i];
             proj.timer += deltaTime;
 
-            // Move projectile
-            proj.mesh.position.add(
-                proj.direction.clone().multiplyScalar(proj.speed * deltaTime)
-            );
+            // Move projectile - V6.2 FIX: Avoid clone() per-frame
+            const moveSpeed = proj.speed * deltaTime;
+            proj.mesh.position.x += proj.direction.x * moveSpeed;
+            proj.mesh.position.y += proj.direction.y * moveSpeed;
+            proj.mesh.position.z += proj.direction.z * moveSpeed;
 
             // V4: Spawn trail particles
             if (vfx) {
@@ -14519,8 +14756,43 @@ class Game {
         this.currentSkyColor.lerp(this.targetSkyColor, deltaTime * 0.5);
         this.scene.background.copy(this.currentSkyColor);
 
-        // Also update fog color to match atmosphere
-        const fogColor = this.currentSkyColor.clone().multiplyScalar(1.5);
+        // Base fog color from atmosphere
+        let fogColor = this.currentSkyColor.clone().multiplyScalar(1.5);
+
+        // V7.2: Red fog effect when near Chronophage boss
+        if (this.currentBoss && this.currentBoss.isAlive && this.player) {
+            const distToBoss = this.player.position.distanceTo(this.currentBoss.position);
+            const maxEffectDist = 25;
+            const minEffectDist = 5;
+
+            if (distToBoss < maxEffectDist) {
+                // Calculate intensity based on proximity (closer = more red)
+                const proximity = 1 - Math.max(0, (distToBoss - minEffectDist) / (maxEffectDist - minEffectDist));
+                const redIntensity = Math.pow(proximity, 1.5); // Exponential falloff
+
+                // Get boss element color for tinting
+                const bossColor = this.currentBoss.colors ? this.currentBoss.colors.glow : 0xff4444;
+                const bossColorObj = new THREE.Color(bossColor);
+
+                // Blend fog color toward boss color
+                fogColor.lerp(bossColorObj, redIntensity * 0.6);
+
+                // Also tighten fog when very close to boss
+                const fogNear = CONFIG.fogNear - proximity * 10;
+                const fogFar = CONFIG.fogFar - proximity * 30;
+                this.scene.fog.near = Math.max(5, fogNear);
+                this.scene.fog.far = Math.max(30, fogFar);
+            } else {
+                // Reset fog distances when far from boss
+                this.scene.fog.near = CONFIG.fogNear;
+                this.scene.fog.far = CONFIG.fogFar;
+            }
+        } else {
+            // No boss - normal fog
+            this.scene.fog.near = CONFIG.fogNear;
+            this.scene.fog.far = CONFIG.fogFar;
+        }
+
         this.scene.fog.color.copy(fogColor);
     }
 
@@ -14872,81 +15144,86 @@ class Game {
         return baseScale + wavesPastStart * scalePerWave;
     }
 
-    // Wave System
+    // Wave System - V7.3: Proper scaling with increasing enemy counts and variety
     getWaveComposition(waveNumber) {
-        // Define enemy composition based on wave number
         const composition = [];
 
-        // V5: Minimal enemy count growth - strength scales instead
-        // Start with 3 enemies, add +1 every boss wave (every 10 levels)
-        // Wave 1-9: 3 enemies, Wave 10-19: 4 enemies, Wave 20-29: 5 enemies, etc.
-        const bossesDefeated = Math.floor((waveNumber - 1) / 10);
+        // V7.3: Use CONFIG values for proper scaling
+        // Base enemies + additional enemies per wave
         const diffMod = CONFIG.difficulty[currentDifficulty].waveCountMod || 0;
-        const baseCount = 3 + bossesDefeated + diffMod;
-        const maxCount = 6; // Hard cap at 6 enemies per wave (reached at wave 30+)
-        const totalEnemies = Math.max(2, Math.min(baseCount, maxCount));
+        const baseCount = CONFIG.baseWaveEnemies + diffMod;
+        const perWaveIncrease = CONFIG.enemiesPerWave;
 
-        // Wave 1-2: Mostly Ticks
-        if (waveNumber <= 2) {
-            for (let i = 0; i < totalEnemies; i++) {
+        // Total enemies scales with wave: base + (wave-1) * perWave, capped at maxEnemiesAlive
+        const scaledCount = baseCount + Math.floor((waveNumber - 1) * perWaveIncrease * 0.5);
+        const totalEnemies = Math.min(scaledCount, CONFIG.maxEnemiesAlive);
+
+        // Enemy unlock thresholds - gradual introduction
+        const unlockedEnemies = [];
+
+        // Ticks: Always available (basic enemy)
+        unlockedEnemies.push({ type: 'tick', weight: 10, minWave: 1 });
+
+        // Tocks: Wave 2+ (slightly tougher)
+        if (waveNumber >= 2) {
+            unlockedEnemies.push({ type: 'tock', weight: 8 + waveNumber, minWave: 2 });
+        }
+
+        // Mites: Wave 3+ (fast swarmers)
+        if (waveNumber >= 3) {
+            unlockedEnemies.push({ type: 'mite', weight: 6 + waveNumber * 0.5, minWave: 3 });
+        }
+
+        // Pendulum: Wave 5+ (ranged)
+        if (waveNumber >= 5) {
+            unlockedEnemies.push({ type: 'pendulum', weight: 5 + (waveNumber - 4), minWave: 5 });
+        }
+
+        // Grandfather: Wave 7+ (tanky)
+        if (waveNumber >= 7) {
+            unlockedEnemies.push({ type: 'grandfather', weight: 4 + (waveNumber - 6) * 0.8, minWave: 7 });
+        }
+
+        // Second Hand: Wave 11+ (elite, post-first-boss)
+        if (waveNumber >= 11) {
+            unlockedEnemies.push({ type: 'secondhand', weight: 3 + (waveNumber - 10) * 0.6, minWave: 11 });
+        }
+
+        // Calculate total weight for weighted random selection
+        const totalWeight = unlockedEnemies.reduce((sum, e) => sum + e.weight, 0);
+
+        // Guarantee at least one of each unlocked enemy type for variety
+        const guaranteedTypes = [];
+        if (waveNumber >= 11 && totalEnemies >= 4) guaranteedTypes.push('secondhand');
+        if (waveNumber >= 7 && totalEnemies >= 3) guaranteedTypes.push('grandfather');
+        if (waveNumber >= 5 && totalEnemies >= 3) guaranteedTypes.push('pendulum');
+        if (waveNumber >= 3) guaranteedTypes.push('mite');
+        if (waveNumber >= 2) guaranteedTypes.push('tock');
+        guaranteedTypes.push('tick');
+
+        // Add guaranteed enemies first (up to half the wave)
+        const maxGuaranteed = Math.min(guaranteedTypes.length, Math.floor(totalEnemies * 0.6));
+        for (let i = 0; i < maxGuaranteed; i++) {
+            composition.push(guaranteedTypes[i]);
+        }
+
+        // Fill remaining slots with weighted random selection
+        for (let i = composition.length; i < totalEnemies; i++) {
+            let roll = Math.random() * totalWeight;
+            for (const enemy of unlockedEnemies) {
+                roll -= enemy.weight;
+                if (roll <= 0) {
+                    composition.push(enemy.type);
+                    break;
+                }
+            }
+            // Fallback to tick if somehow nothing selected
+            if (composition.length === i) {
                 composition.push('tick');
             }
         }
-        // Wave 3-4: Introduce Tocks and Mites
-        else if (waveNumber <= 4) {
-            const tocks = Math.floor(waveNumber / 2);
-            const mites = Math.max(1, Math.floor(waveNumber / 3));
-            for (let i = 0; i < totalEnemies; i++) {
-                if (i < mites) composition.push('mite');
-                else if (i < mites + tocks) composition.push('tock');
-                else composition.push('tick');
-            }
-        }
-        // Wave 5-6: Introduce Pendulum
-        else if (waveNumber <= 6) {
-            const tocks = Math.floor(waveNumber / 2);
-            const pendulums = Math.floor(waveNumber / 3);
-            const mites = Math.floor(waveNumber / 4);
-            for (let i = 0; i < totalEnemies; i++) {
-                if (i < pendulums) composition.push('pendulum');
-                else if (i < pendulums + mites) composition.push('mite');
-                else if (i < pendulums + mites + tocks) composition.push('tock');
-                else composition.push('tick');
-            }
-        }
-        // Wave 7-9: Introduce Grandfather
-        else if (waveNumber <= 9) {
-            const grandfathers = Math.floor((waveNumber - 6) / 2) + 1;
-            const tocks = Math.floor(waveNumber / 3);
-            const pendulums = Math.floor(waveNumber / 4);
-            const mites = Math.floor(waveNumber / 5);
-            for (let i = 0; i < totalEnemies; i++) {
-                if (i < grandfathers) composition.push('grandfather');
-                else if (i < grandfathers + pendulums) composition.push('pendulum');
-                else if (i < grandfathers + pendulums + mites) composition.push('mite');
-                else if (i < grandfathers + pendulums + mites + tocks) composition.push('tock');
-                else composition.push('tick');
-            }
-        }
-        // Wave 10+: Full variety including Second Hand
-        else {
-            const secondhands = Math.min(Math.floor((waveNumber - 9) / 2) + 1, 3);
-            const grandfathers = Math.min(Math.floor(waveNumber / 5), 2);
-            const pendulums = Math.floor(waveNumber / 4);
-            const tocks = Math.floor(waveNumber / 3);
-            const mites = Math.floor(waveNumber / 6);
 
-            for (let i = 0; i < totalEnemies; i++) {
-                if (i < secondhands) composition.push('secondhand');
-                else if (i < secondhands + grandfathers) composition.push('grandfather');
-                else if (i < secondhands + grandfathers + pendulums) composition.push('pendulum');
-                else if (i < secondhands + grandfathers + pendulums + mites) composition.push('mite');
-                else if (i < secondhands + grandfathers + pendulums + mites + tocks) composition.push('tock');
-                else composition.push('tick');
-            }
-        }
-
-        // Shuffle for variety
+        // Shuffle for variety (so guaranteed types aren't always first)
         for (let i = composition.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [composition[i], composition[j]] = [composition[j], composition[i]];
@@ -15272,10 +15549,12 @@ class Game {
                 enemy = new MinuteMite(this.scene, position, 1.0, this);
                 break;
             case 'boss':
-                // Create elemental boss based on wave number
+                // V7: Use new simplified Chronophage boss class
                 const chronophageType = getChronophageType(this.wave);
-                enemy = new ElementalChronophage(this.scene, position, this, chronophageType);
+                enemy = new Chronophage(this.scene, position, this, chronophageType);
                 this.currentBoss = enemy; // Track the boss
+                // V7.3: Trigger boss fight music with element
+                audioManager.enterBossFight(chronophageType ? chronophageType.specialAttack : null);
                 break;
             default:
                 enemy = new Tick(this.scene, position);
@@ -15836,8 +16115,8 @@ class Game {
         this.screenEffects.slowmo(0.7, 0.1);
         this.screenEffects.shake(0.2, 0.15);
 
-        // Play death sound (boss vs normal) - check for both ChronophagePrime and ElementalChronophage
-        const isBoss = enemy instanceof ChronophagePrime || enemy.constructor.name === 'ElementalChronophage';
+        // Play death sound (boss vs normal)
+        const isBoss = enemy.isBoss || enemy instanceof Chronophage;
         audioManager.playEnemyDeath(isBoss);
 
         // When boss dies, kill all remaining minions
@@ -15861,9 +16140,9 @@ class Game {
             this.vfx.recordKill();
         }
 
-        // V3: Health drop chance (20% for normal, 50% for bosses)
-        const dropChance = isBoss ? 0.5 : 0.2;
-        if (Math.random() < dropChance) {
+        // V7.2: Health drop chance - increased rates (35% for normal, 75% for bosses)
+        const healthDropChance = isBoss ? 0.75 : 0.35;
+        if (Math.random() < healthDropChance) {
             this.spawnHealthDrop(enemy.position);
         }
 
@@ -15874,6 +16153,8 @@ class Game {
         // V4 INFINITE: Boss drops treasure chest that must be opened
         if (isBoss) {
             this.spawnBossChest(enemy.position);
+            // V7.3: Exit boss fight music mode
+            audioManager.exitBossFight();
         }
     }
 
@@ -15890,7 +16171,7 @@ class Game {
     killAllMinions() {
         for (const enemy of this.enemies) {
             // Skip the boss itself (already dead) and already dying enemies
-            if (enemy instanceof ChronophagePrime || !enemy.isAlive || enemy.isDying) continue;
+            if (enemy.isBoss || enemy instanceof Chronophage || !enemy.isAlive || enemy.isDying) continue;
 
             // Instant kill with death effect
             enemy.isAlive = false;
@@ -15923,12 +16204,13 @@ class Game {
         if (!this.player) return;
 
         // Gold drop - spawn visual gold coins (doubled)
-        const baseGold = isBoss ? 100 : 10 + Math.floor(this.wave * 1.0);
+        // V7.2: Increased gold drops
+        const baseGold = isBoss ? 200 : 15 + Math.floor(this.wave * 2.0);
         const goldVariance = Math.floor(baseGold * 0.3 * (Math.random() - 0.5));
         const totalGold = baseGold + goldVariance;
 
-        // Spawn multiple coins for visual effect
-        const numCoins = isBoss ? Math.min(10, Math.ceil(totalGold / 10)) : Math.min(5, Math.ceil(totalGold / 3));
+        // Spawn multiple coins for visual effect - more coins!
+        const numCoins = isBoss ? Math.min(15, Math.ceil(totalGold / 10)) : Math.min(8, Math.ceil(totalGold / 3));
         const goldPerCoin = Math.ceil(totalGold / numCoins);
 
         for (let i = 0; i < numCoins; i++) {
@@ -16004,6 +16286,7 @@ class Game {
 
                 // Visual/audio feedback
                 this.screenEffects.flashVignette('#00ff88', 0.3);
+                audioManager.playHealthPickup();
 
                 // Remove drop
                 drop.dispose();
@@ -16031,6 +16314,7 @@ class Game {
 
                 // Visual/audio feedback
                 this.screenEffects.flashVignette('#ffd700', 0.1);
+                audioManager.playGoldPickup();
 
                 // Remove coin
                 coin.dispose();
@@ -16298,6 +16582,9 @@ class Game {
 
     gameOver() {
         this.state = GameState.GAMEOVER;
+
+        // V6: Clean up all active SFX synths to prevent memory leaks
+        audioManager.disposeAllSFX();
 
         // Play game over sound and stop combat music
         audioManager.playGameOver();
